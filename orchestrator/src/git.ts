@@ -250,6 +250,47 @@ export async function createPR(opts: CreatePROpts): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Agent state setup
+// ---------------------------------------------------------------------------
+
+export async function setupAgentState(worktreePath: string): Promise<void> {
+  await mkdir(join(worktreePath, '.agent-state'), { recursive: true });
+
+  const gitignorePath = join(worktreePath, '.gitignore');
+  let content = '';
+  try {
+    content = await Bun.file(gitignorePath).text();
+  } catch {
+    // File doesn't exist — start fresh
+  }
+
+  if (!content.includes('.agent-state')) {
+    content += '\n# Agent orchestrator state (auto-generated)\n.agent-state/\n';
+    await Bun.write(gitignorePath, content);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Commit check
+// ---------------------------------------------------------------------------
+
+export async function hasLocalCommits(worktreePath: string): Promise<boolean> {
+  const result = await spawn(
+    ['git', '-C', worktreePath, 'log', '@{upstream}..HEAD', '--oneline'],
+  );
+
+  if (result.exitCode === 0) {
+    return result.stdout.trim().length > 0;
+  }
+
+  // Fallback: check if HEAD has any commits at all
+  const fallback = await spawn(
+    ['git', '-C', worktreePath, 'log', '--oneline', '-1'],
+  );
+  return fallback.exitCode === 0 && fallback.stdout.trim().length > 0;
+}
+
+// ---------------------------------------------------------------------------
 // Agent settings
 // ---------------------------------------------------------------------------
 

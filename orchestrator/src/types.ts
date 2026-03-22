@@ -54,6 +54,7 @@ export interface Run {
   is_revision: number;           // 0 or 1
   pr_number: number | null;
   agent_pid: number | null;
+  iterations: number;
   error_summary: string | null;
   pr_url: string | null;
   created_at: string;
@@ -64,7 +65,8 @@ export interface Run {
 // SSE event types
 export type SSEEvent =
   | { type: 'run_update'; run: Run }
-  | { type: 'log'; runId: string; stream: string; content: string };
+  | { type: 'log'; runId: string; stream: string; content: string }
+  | { type: 'iteration'; runId: string; current: number; max: number; allDone: boolean };
 
 // Log entry
 export interface LogEntry {
