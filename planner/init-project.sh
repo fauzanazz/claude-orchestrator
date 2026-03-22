@@ -18,10 +18,18 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --path)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --path requires a value" >&2
+        exit 1
+      fi
       BASE_DIR="$2"
       shift 2
       ;;
     --team)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --team requires a value" >&2
+        exit 1
+      fi
       LINEAR_TEAM="$2"
       shift 2
       ;;
@@ -108,6 +116,7 @@ JSON_MODIFIED=false
 ORIGINAL_JSON=""
 
 rollback() {
+  trap - ERR
   echo "Rolling back..." >&2
   if [ "$JSON_MODIFIED" = true ] && [ -n "$ORIGINAL_JSON" ]; then
     echo "$ORIGINAL_JSON" > "$PROJECTS_JSON"
@@ -122,6 +131,8 @@ rollback() {
   fi
   exit 1
 }
+
+trap rollback ERR
 
 # --- Step 1: Create local directory ---
 echo "Creating $PROJECT_PATH..."
@@ -187,13 +198,13 @@ echo "Creating initial commit..."
 git -C "$PROJECT_PATH" add -A
 git -C "$PROJECT_PATH" commit -m "Initial commit"
 
-# --- Step 5: Create GitHub repo ---
+# --- Step 5: Create GitHub repo and push ---
 echo "Creating GitHub repo ($VISIBILITY)..."
-gh repo create "$PROJECT_NAME" "--$VISIBILITY" --source "$PROJECT_PATH" --push || {
-  echo "Error: failed to create GitHub repo" >&2
-  rollback
-}
+gh repo create "$PROJECT_NAME" "--$VISIBILITY" --source "$PROJECT_PATH"
 REPO_CREATED=true
+
+echo "Pushing to remote..."
+git -C "$PROJECT_PATH" push -u origin main
 
 # --- Step 6: Register in projects.json ---
 echo "Registering in projects.json..."
