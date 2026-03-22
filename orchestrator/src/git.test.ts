@@ -47,25 +47,33 @@ describe('setupAgentState', () => {
 });
 
 describe('hasLocalCommits', () => {
+  async function gitRun(args: string[]): Promise<void> {
+    const proc = Bun.spawn(args);
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      throw new Error(`git command failed (exit ${exitCode}): ${args.join(' ')}`);
+    }
+  }
+
   test('returns true when commits exist ahead of upstream', async () => {
     // Set up a bare repo + clone to simulate upstream tracking
     const bareDir = join(tmpDir, 'bare.git');
     const workDir = join(tmpDir, 'work');
 
     // Create bare repo with initial commit
-    await Bun.spawn(['git', 'init', '--bare', bareDir]).exited;
-    await Bun.spawn(['git', 'clone', bareDir, workDir]).exited;
-    await Bun.spawn(['git', '-C', workDir, 'config', 'user.email', 'test@test.com']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'config', 'user.name', 'Test']).exited;
+    await gitRun(['git', 'init', '--bare', bareDir]);
+    await gitRun(['git', 'clone', bareDir, workDir]);
+    await gitRun(['git', '-C', workDir, 'config', 'user.email', 'test@test.com']);
+    await gitRun(['git', '-C', workDir, 'config', 'user.name', 'Test']);
     await Bun.write(join(workDir, 'init.txt'), 'init');
-    await Bun.spawn(['git', '-C', workDir, 'add', '.']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'commit', '-m', 'initial']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'push', 'origin', 'main']).exited;
+    await gitRun(['git', '-C', workDir, 'add', '.']);
+    await gitRun(['git', '-C', workDir, 'commit', '-m', 'initial']);
+    await gitRun(['git', '-C', workDir, 'push', 'origin', 'main']);
 
     // Make a local commit
     await Bun.write(join(workDir, 'new.txt'), 'new');
-    await Bun.spawn(['git', '-C', workDir, 'add', '.']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'commit', '-m', 'local change']).exited;
+    await gitRun(['git', '-C', workDir, 'add', '.']);
+    await gitRun(['git', '-C', workDir, 'commit', '-m', 'local change']);
 
     const result = await hasLocalCommits(workDir);
     expect(result).toBe(true);
@@ -75,14 +83,14 @@ describe('hasLocalCommits', () => {
     const bareDir = join(tmpDir, 'bare2.git');
     const workDir = join(tmpDir, 'work2');
 
-    await Bun.spawn(['git', 'init', '--bare', bareDir]).exited;
-    await Bun.spawn(['git', 'clone', bareDir, workDir]).exited;
-    await Bun.spawn(['git', '-C', workDir, 'config', 'user.email', 'test@test.com']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'config', 'user.name', 'Test']).exited;
+    await gitRun(['git', 'init', '--bare', bareDir]);
+    await gitRun(['git', 'clone', bareDir, workDir]);
+    await gitRun(['git', '-C', workDir, 'config', 'user.email', 'test@test.com']);
+    await gitRun(['git', '-C', workDir, 'config', 'user.name', 'Test']);
     await Bun.write(join(workDir, 'init.txt'), 'init');
-    await Bun.spawn(['git', '-C', workDir, 'add', '.']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'commit', '-m', 'initial']).exited;
-    await Bun.spawn(['git', '-C', workDir, 'push', 'origin', 'main']).exited;
+    await gitRun(['git', '-C', workDir, 'add', '.']);
+    await gitRun(['git', '-C', workDir, 'commit', '-m', 'initial']);
+    await gitRun(['git', '-C', workDir, 'push', 'origin', 'main']);
 
     const result = await hasLocalCommits(workDir);
     expect(result).toBe(false);

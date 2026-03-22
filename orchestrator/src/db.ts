@@ -50,8 +50,11 @@ db.run(`
 // Migration: add iterations column
 try {
   db.run(`ALTER TABLE runs ADD COLUMN iterations INTEGER NOT NULL DEFAULT 0`);
-} catch {
-  // Column already exists
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg.includes('duplicate column')) {
+    throw err;
+  }
 }
 
 // Prepared statements

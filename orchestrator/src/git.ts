@@ -283,11 +283,15 @@ export async function hasLocalCommits(worktreePath: string): Promise<boolean> {
     return result.stdout.trim().length > 0;
   }
 
-  // Fallback: check if HEAD has any commits at all
+  // Fallback: use rev-list to count commits not on any remote-tracking branch
   const fallback = await spawn(
-    ['git', '-C', worktreePath, 'log', '--oneline', '-1'],
+    ['git', '-C', worktreePath, 'rev-list', '--count', '--all', '--not', '--remotes'],
   );
-  return fallback.exitCode === 0 && fallback.stdout.trim().length > 0;
+  if (fallback.exitCode === 0) {
+    return parseInt(fallback.stdout.trim(), 10) > 0;
+  }
+
+  return false;
 }
 
 // ---------------------------------------------------------------------------

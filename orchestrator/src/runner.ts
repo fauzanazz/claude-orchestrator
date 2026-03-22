@@ -394,12 +394,12 @@ export async function executeRun(
 
     const runStartTime = Date.now();
     let isFirstRun = true;
-    let iteration = 0;
+    let completedSessions = 0;
 
-    for (; iteration < config.maxSessionIterations; iteration++) {
+    for (let iteration = 0; iteration < config.maxSessionIterations; iteration++) {
       const elapsed = Date.now() - runStartTime;
       if (elapsed > config.agentTimeoutMs) {
-        bufferLog(runId, 'system', `[runner] Total run timeout (${config.agentTimeoutMs}ms) reached after ${iteration} session(s)`);
+        bufferLog(runId, 'system', `[runner] Total run timeout (${config.agentTimeoutMs}ms) reached after ${completedSessions} session(s)`);
         break;
       }
 
@@ -432,19 +432,21 @@ export async function executeRun(
       if (result === 'timeout') {
         bufferLog(runId, 'system', `[runner] Session ${iteration + 1} timed out after ${config.sessionTimeoutMs}ms — killing`);
         agentProc.kill();
+        await completion;
       } else {
         const exitCode = agentProc.exitCode ?? 0;
         bufferLog(runId, 'system', `[runner] Session ${iteration + 1} exited with code ${exitCode}`);
       }
 
-      updateRunIterations(runId, iteration + 1);
+      completedSessions++;
+      updateRunIterations(runId, completedSessions);
 
-      broadcastSSE({ type: 'iteration', runId, current: iteration + 1, max: config.maxSessionIterations, allDone: false });
+      broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: false });
 
       const features = await readFeatureList(worktreePath!);
       if (isAllFeaturesDone(features)) {
-        bufferLog(runId, 'system', `[runner] All features complete after ${iteration + 1} session(s)`);
-        broadcastSSE({ type: 'iteration', runId, current: iteration + 1, max: config.maxSessionIterations, allDone: true });
+        bufferLog(runId, 'system', `[runner] All features complete after ${completedSessions} session(s)`);
+        broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: true });
         break;
       }
 
@@ -454,12 +456,12 @@ export async function executeRun(
       }
     }
 
-    bufferLog(runId, 'system', `[runner] Loop finished after ${iteration + 1} session(s)`);
+    bufferLog(runId, 'system', `[runner] Loop finished after ${completedSessions} session(s)`);
 
     const hasCommits = await hasLocalCommits(worktreePath!);
 
     if (!hasCommits) {
-      throw new Error(`No commits made after ${iteration + 1} session(s) — nothing to push`);
+      throw new Error(`No commits made after ${completedSessions} session(s) — nothing to push`);
     }
 
     bufferLog(runId, 'system', `[runner] Pushing branch ${issue.branch}`);
@@ -488,7 +490,7 @@ export async function executeRun(
     updateLinearStatus(issue.key, 'In Review');
     commentOnIssue(issue.key, `PR ready for review: ${prUrl}`);
 
-    bufferLog(runId, 'system', `[runner] Run ${runId} completed successfully after ${iteration + 1} session(s)`);
+    bufferLog(runId, 'system', `[runner] Run ${runId} completed successfully after ${completedSessions} session(s)`);
 
     const updatedRun = getRun(runId);
     if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
