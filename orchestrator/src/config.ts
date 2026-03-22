@@ -38,10 +38,18 @@ export const config = {
   autoContinueDelayMs: parseIntEnv('AUTO_CONTINUE_DELAY_MS', 3000),
   pollIntervalMs: parseIntEnv('POLL_INTERVAL_MS', 30000),
   logFlushIntervalMs: parseIntEnv('LOG_FLUSH_INTERVAL_MS', 5000),
+  reviewPollIntervalMs: parseIntEnv('REVIEW_POLL_INTERVAL_MS', 120000),
+  reviewMinBodyLength: parseIntEnv('REVIEW_MIN_BODY_LENGTH', 10),
+  reviewWatchMaxAgeDays: parseIntEnv('REVIEW_WATCH_MAX_AGE_DAYS', 7),
   port: parseIntEnv('PORT', 7400),
 
   tunnelName: process.env.TUNNEL_NAME,
   tunnelHostname: process.env.TUNNEL_HOSTNAME,
+
+  notifyPollIntervalMs: parseInt(process.env.NOTIFY_POLL_INTERVAL_MS ?? '120000', 10),
+  slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
+  maxFixRetries: parseInt(process.env.MAX_FIX_RETRIES ?? '3', 10),
+  fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
 
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),
 };

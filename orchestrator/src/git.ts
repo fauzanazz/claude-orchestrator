@@ -316,3 +316,73 @@ export async function writeAgentSettings(worktreePath: string): Promise<void> {
     JSON.stringify(AGENT_SETTINGS, null, 2) + '\n',
   );
 }
+
+// ---------------------------------------------------------------------------
+// Rebase & force-push (for auto-fix conflict resolution)
+// ---------------------------------------------------------------------------
+
+export interface RebaseResult {
+  success: boolean;
+  conflictOutput?: string;
+}
+
+/**
+ * Attempts to rebase the current branch onto the latest base branch.
+ * Returns success status and conflict output if the rebase fails.
+ */
+export async function rebaseOnto(
+  worktreePath: string,
+  baseBranch: string,
+): Promise<RebaseResult> {
+  // Fetch latest base branch
+  const fetchResult = await spawn(
+    ['git', 'fetch', 'origin', baseBranch],
+    { cwd: worktreePath },
+  );
+  if (fetchResult.exitCode !== 0) {
+    return {
+      success: false,
+      conflictOutput: `Failed to fetch ${baseBranch}: ${fetchResult.stderr.trim()}`,
+    };
+  }
+
+  // Attempt rebase
+  const rebaseResult = await spawn(
+    ['git', 'rebase', `origin/${baseBranch}`],
+    { cwd: worktreePath },
+  );
+
+  if (rebaseResult.exitCode === 0) {
+    return { success: true };
+  }
+
+  return {
+    success: false,
+    conflictOutput: [rebaseResult.stdout, rebaseResult.stderr].filter(Boolean).join('\n').trim(),
+  };
+}
+
+/**
+ * Aborts an in-progress rebase.
+ */
+export async function abortRebase(worktreePath: string): Promise<void> {
+  await spawn(['git', 'rebase', '--abort'], { cwd: worktreePath });
+}
+
+/**
+ * Force-pushes from the worktree using --force-with-lease for safety.
+ */
+export async function forcePushFromWorktree(
+  worktreePath: string,
+  branch: string,
+): Promise<void> {
+  const result = await spawn(
+    ['git', 'push', '--force-with-lease', 'origin', `local/${branch}:${branch}`],
+    { cwd: worktreePath },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `git force-push failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+}
