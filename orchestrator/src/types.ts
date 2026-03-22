@@ -1,6 +1,8 @@
 // Run status
 export type RunStatus = 'queued' | 'running' | 'success' | 'failed';
 
+export type FixType = 'merge_conflict' | 'ci_failure';
+
 // Project config from projects.json
 export interface ProjectConfig {
   path?: string;
@@ -52,6 +54,9 @@ export interface Run {
   worktree_path: string;
   status: RunStatus;
   is_revision: number;           // 0 or 1
+  is_fix: number;                // 0 or 1
+  fix_type: string | null;       // 'merge_conflict' or 'ci_failure'
+  fix_attempt: number;           // which attempt (1, 2, 3...)
   pr_number: number | null;
   agent_pid: number | null;
   error_summary: string | null;
@@ -65,6 +70,38 @@ export interface Run {
 export type SSEEvent =
   | { type: 'run_update'; run: Run }
   | { type: 'log'; runId: string; stream: string; content: string };
+
+// PR merge-readiness status (from gh CLI)
+export interface PRMergeStatus {
+  repo: string;
+  prNumber: number;
+  title: string;
+  url: string;
+  branch: string;
+  reviewDecision: string;
+  checks: Array<{ name: string; conclusion: string }>;
+  isReady: boolean;
+}
+
+// Processed review record (for deduplication)
+export interface ProcessedReview {
+  review_id: string;
+  pr_number: number;
+  repo: string;
+  run_id: string;
+  created_at: string;
+}
+
+// Fix tracking record (for automated fix attempts)
+export interface FixTracking {
+  repo: string;
+  pr_number: number;
+  fix_type: string;
+  attempt_count: number;
+  last_run_id: string | null;
+  exhausted: number;             // 0 or 1
+  updated_at: string;
+}
 
 // Log entry
 export interface LogEntry {

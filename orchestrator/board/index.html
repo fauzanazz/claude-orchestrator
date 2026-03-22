@@ -100,6 +100,7 @@ td {
 .col-project  { max-width: 110px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
 .col-key      { color: var(--text-muted); }
 .col-title    { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.col-type     { white-space: nowrap; }
 .col-rev      { color: var(--text-muted); text-align: center; }
 .col-status   { white-space: nowrap; }
 .col-duration { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -153,6 +154,32 @@ td {
 .btn.retry:hover        { background: var(--red); color: #fff; }
 .btn.logs               { color: var(--text-muted); }
 .btn.logs:hover         { color: #fff; }
+
+/* Fix badges */
+.fix-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.fix-badge.merge_conflict {
+  background: rgba(224, 168, 64, 0.15);
+  color: var(--yellow);
+  border: 1px solid rgba(224, 168, 64, 0.3);
+}
+.fix-badge.ci_failure {
+  background: rgba(224, 85, 85, 0.15);
+  color: var(--red);
+  border: 1px solid rgba(224, 85, 85, 0.3);
+}
+.fix-attempt {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 4px;
+}
 
 /* Modal */
 #modal-overlay {
@@ -242,6 +269,17 @@ td {
 
 #filter-bar select:hover { border-color: var(--text-muted); }
 #filter-bar select:focus { outline: none; border-color: var(--blue); }
+
+#project-desc {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50%;
+}
 </style>
 </head>
 <body>
@@ -267,6 +305,7 @@ td {
   <select id="filter-project">
     <option value="">All</option>
   </select>
+  <span id="project-desc"></span>
 </div>
 
 <div id="table-wrap">
@@ -276,7 +315,7 @@ td {
         <th class="col-project">Project</th>
         <th class="col-key">Key</th>
         <th class="col-title">Title</th>
-        <th class="col-rev">Rev</th>
+        <th class="col-type">Type</th>
         <th class="col-status">Status</th>
         <th class="col-duration">Duration</th>
         <th class="col-actions">Actions</th>
@@ -284,6 +323,7 @@ td {
     </thead>
     <tbody id="runs-body">
       <tr id="empty-row"><td colspan="7">Loading...</td></tr>
+
     </tbody>
   </table>
 </div>
@@ -319,6 +359,7 @@ const logOutput   = document.getElementById('log-output');
 const modalClose  = document.getElementById('modal-close');
 const filterStatus  = document.getElementById('filter-status');
 const filterProject = document.getElementById('filter-project');
+const projectDesc   = document.getElementById('project-desc');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(seconds) {
@@ -351,20 +392,26 @@ function statusLabel(status) {
   return map[status] || status;
 }
 
-// Compute revision number for a run (how many revisions of same issue_key came before it)
-function revNumber(run) {
-  if (!run.is_revision) return '';
-  const siblings = [...runs.values()].filter(r => r.issue_key === run.issue_key);
-  // sort by created_at or id
-  siblings.sort((a, b) => (a.created_at || a.id) < (b.created_at || b.id) ? -1 : 1);
-  const idx = siblings.findIndex(r => r.id === run.id);
-  return `#${idx + 1}`;
+// Compute the type badge HTML for a run
+function runTypeBadge(run) {
+  if (run.is_fix && run.fix_type) {
+    const label = run.fix_type === 'merge_conflict' ? 'Conflict' : 'CI Fix';
+    const attempt = run.fix_attempt ? `<span class="fix-attempt">${run.fix_attempt}/${window._maxFixRetries || '?'}</span>` : '';
+    return `<span class="fix-badge ${esc(run.fix_type)}">${label}</span>${attempt}`;
+  }
+  if (run.is_revision) {
+    const siblings = [...runs.values()].filter(r => r.issue_key === run.issue_key);
+    siblings.sort((a, b) => (a.created_at || a.id) < (b.created_at || b.id) ? -1 : 1);
+    const idx = siblings.findIndex(r => r.id === run.id);
+    return `<span style="color:var(--text-muted)">Rev #${idx + 1}</span>`;
+  }
+  return '';
 }
 
 // ── Render ───────────────────────────────────────────────────────────────────
 function renderRow(run) {
   const sc   = statusClass(run.status);
-  const rev  = revNumber(run);
+  const typeBadge = runTypeBadge(run);
   const dur  = run.status === 'running'
     ? fmt(elapsed(run.started_at))
     : fmt(totalDuration(run));
@@ -382,7 +429,7 @@ function renderRow(run) {
     <td class="col-project" title="${esc(run.project || '')}">${esc(run.project || '')}</td>
     <td class="col-key">${esc(run.issue_key || '')}</td>
     <td class="col-title" title="${esc(run.title || '')}">${esc(run.title || '')}</td>
-    <td class="col-rev">${esc(rev)}</td>
+    <td class="col-type">${typeBadge}</td>
     <td class="col-status">
       <span class="status">
         <span class="dot ${sc}"></span>
@@ -477,6 +524,8 @@ function connectSSE() {
 
     if (data.type === 'run_update' && data.run) {
       upsertRun(data.run);
+      populateProjectFilter([data.run]);
+      applyFilters();
     } else if (data.type === 'log') {
       if (activeLogRunId && data.runId === activeLogRunId) {
         appendLogLine(data.stream, data.content);
@@ -496,6 +545,14 @@ function connectSSE() {
 
 // ── Filters ──────────────────────────────────────────────────────────────────
 const knownProjects = new Set();
+let projectMeta = {};  // { projectName: { repo, description } }
+
+async function fetchProjectMeta() {
+  try {
+    const res = await fetch('/api/projects');
+    if (res.ok) projectMeta = await res.json();
+  } catch { /* non-critical */ }
+}
 
 function populateProjectFilter(list) {
   list.forEach(r => { if (r.project) knownProjects.add(r.project); });
@@ -510,6 +567,18 @@ function populateProjectFilter(list) {
   filterProject.value = current;
 }
 
+function updateProjectDesc() {
+  const selected = filterProject.value;
+  const meta = projectMeta[selected];
+  if (meta && meta.description) {
+    projectDesc.textContent = meta.description;
+    projectDesc.title = meta.description;
+  } else {
+    projectDesc.textContent = '';
+    projectDesc.title = '';
+  }
+}
+
 function applyFilters() {
   const status = filterStatus.value;
   const project = filterProject.value;
@@ -519,6 +588,7 @@ function applyFilters() {
     const show = (!status || run.status === status) && (!project || run.project === project);
     row.style.display = show ? '' : 'none';
   });
+  updateProjectDesc();
   const visibleCount = [...runs.values()].filter(run => {
     const row = document.getElementById(`row-${run.id}`);
     return row && row.style.display !== 'none';
@@ -609,7 +679,7 @@ modalClose.addEventListener('click', closeLogs);
 modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeLogs(); });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-fetchRuns();
+fetchProjectMeta().then(() => fetchRuns());
 connectSSE();
 startTicker();
 </script>

@@ -3,14 +3,14 @@ import { join } from 'node:path';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
-import { listRuns, getLogsForRun, getRun, getRunByBranch, insertRun } from './db.ts';
+import { listRuns, getLogsForRun, getRun, getRunByBranch, insertRun, isReviewProcessed, markReviewProcessed } from './db.ts';
 import {
   onSSE,
   startRunner,
   enqueueRevision,
   enqueueWithIssue,
-  parseIssueMetadata,
-  resolveProject,
+  reconstructIssueFromRun,
+  loadProjects,
 } from './runner.ts';
 import { startTunnel } from './tunnel.ts';
 
@@ -90,6 +90,16 @@ app.use('*', async (c, next) => {
   return next();
 });
 
+// GET /api/projects — list project names with descriptions
+app.get('/api/projects', (c) => {
+  const projects = loadProjects();
+  const result: Record<string, { repo: string; description?: string }> = {};
+  for (const [key, proj] of Object.entries(projects)) {
+    result[key] = { repo: proj.repo, description: proj.description };
+  }
+  return c.json(result);
+});
+
 // GET /api/runs — list runs with optional ?status= and ?project= filters
 app.get('/api/runs', (c) => {
   const status = c.req.query('status') as RunStatus | undefined;
@@ -118,47 +128,13 @@ app.post('/api/runs/:id/retry', async (c) => {
     return c.json({ error: 'Only failed runs can be retried' }, 400);
   }
 
-  // Read the issue from Linear to reconstruct full Issue metadata
-  const readProc = Bun.spawn(
-    ['lineark', 'issues', 'read', original.issue_key, '--format', 'json'],
-    { stdout: 'pipe', stderr: 'pipe' },
-  );
-  const [readOut, readExit] = await Promise.all([
-    new Response(readProc.stdout).text(),
-    readProc.exited,
-  ]);
-
-  if (readExit !== 0) {
-    return c.json({ error: `Failed to read issue ${original.issue_key} from Linear` }, 500);
-  }
-
-  let linearIssue: Record<string, unknown>;
+  let issue;
   try {
-    linearIssue = JSON.parse(readOut);
-  } catch {
-    return c.json({ error: 'Failed to parse Linear issue' }, 500);
+    issue = await reconstructIssueFromRun(original);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: msg }, 500);
   }
-
-  const meta = parseIssueMetadata((linearIssue.description as string) ?? '');
-  if (!meta) {
-    return c.json({ error: 'Could not parse issue metadata from description' }, 400);
-  }
-
-  const resolved = resolveProject(meta.repo);
-  if (!resolved) {
-    return c.json({ error: `Project not found for repo: ${meta.repo}` }, 400);
-  }
-
-  const issue = {
-    id: linearIssue.id as string,
-    key: original.issue_key,
-    title: original.issue_title,
-    description: linearIssue.description as string,
-    designPath: meta.designPath,
-    branch: meta.branch,
-    repo: meta.repo,
-    baseBranch: resolved.project.baseBranch,
-  };
 
   const newId = ulid();
   const newRun = {
@@ -171,6 +147,9 @@ app.post('/api/runs/:id/retry', async (c) => {
     worktree_path: original.worktree_path,
     status: 'queued' as RunStatus,
     is_revision: original.is_revision,
+    is_fix: original.is_fix ?? 0,
+    fix_type: original.fix_type ?? null,
+    fix_attempt: original.fix_attempt ?? 0,
     pr_number: original.pr_number,
     agent_pid: null,
     error_summary: null,
@@ -238,12 +217,32 @@ app.post('/webhook/github', async (c) => {
   const review = payload.review as Record<string, unknown> | undefined;
   const pullRequest = payload.pull_request as Record<string, unknown> | undefined;
 
-  if (
-    action !== 'submitted' ||
-    !review ||
-    (review.state as string | undefined) !== 'changes_requested'
-  ) {
+  if (action !== 'submitted' || !review) {
     return c.json({ ok: true, skipped: true });
+  }
+
+  const reviewState = ((review.state as string) ?? '').toLowerCase();
+  const reviewBody = ((review.body as string) ?? '').trim();
+  const reviewId = review.id as string | undefined;
+  const reviewAuthor = (review.user as Record<string, unknown>)?.login as string | undefined;
+
+  // Skip self-reviews to prevent loops
+  if (reviewAuthor === config.githubUsername) {
+    return c.json({ ok: true, skipped: true, reason: 'self-review' });
+  }
+
+  // Determine if this review is actionable
+  const isActionable =
+    reviewState === 'changes_requested' ||
+    (reviewState === 'commented' && reviewBody.length >= config.reviewMinBodyLength);
+
+  if (!isActionable) {
+    return c.json({ ok: true, skipped: true, reason: 'not actionable' });
+  }
+
+  // Deduplicate
+  if (reviewId && isReviewProcessed(reviewId)) {
+    return c.json({ ok: true, skipped: true, reason: 'already processed' });
   }
 
   const head = pullRequest?.head as Record<string, unknown> | undefined;
@@ -261,9 +260,23 @@ app.post('/webhook/github', async (c) => {
     return c.json({ error: `No run found for branch: ${branch}` }, 404);
   }
 
-  enqueueRevision(run, prNumber);
+  // Reconstruct Issue data
+  let issue;
+  try {
+    issue = await reconstructIssueFromRun(run);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ error: `Failed to reconstruct issue: ${msg}` }, 500);
+  }
 
-  return c.json({ ok: true });
+  const revisionRunId = enqueueRevision(run, prNumber, issue);
+
+  // Mark review as processed
+  if (reviewId) {
+    markReviewProcessed(reviewId, prNumber, repo, revisionRunId);
+  }
+
+  return c.json({ ok: true, revisionRunId });
 });
 
 // GET / — serve the status board HTML

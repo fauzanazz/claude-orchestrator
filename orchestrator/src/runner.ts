@@ -7,8 +7,17 @@ import {
   insertLog,
   updateRunStatus,
   getRun,
+  getRunByBranch,
   getRunsByStatus,
   markStaleRunsFailed,
+  isReviewProcessed,
+  markReviewProcessed,
+  getWatchableRuns,
+  getFixTracking,
+  upsertFixTracking,
+  markFixExhausted,
+  clearFixTracking,
+  getRunByPRNumber,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -17,8 +26,12 @@ import {
   cleanupWorktree,
   pushFromWorktree,
   createPR,
+  rebaseOnto,
+  abortRebase,
+  forcePushFromWorktree,
 } from './git.ts';
 import { initWorktree } from './init.ts';
+import { pollMergeReadiness, fetchAllPRStatuses, checkFixNeeded, sendFixExhaustedNotification } from './notify.ts';
 import type {
   Run,
   Issue,
@@ -27,6 +40,7 @@ import type {
   ProjectConfig,
   ProjectsConfig,
   SSEEvent,
+  FixType,
 } from './types.ts';
 
 const ulid = monotonicFactory();
@@ -205,6 +219,42 @@ export function resolveProject(
 }
 
 // ---------------------------------------------------------------------------
+// Issue reconstruction (from DB run record via Linear)
+// ---------------------------------------------------------------------------
+
+export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
+  const readOut = await runLineark(['issues', 'read', run.issue_key, '--format', 'json']);
+
+  let linearIssue: Record<string, unknown>;
+  try {
+    linearIssue = JSON.parse(readOut);
+  } catch {
+    throw new Error(`Failed to parse Linear issue for ${run.issue_key}`);
+  }
+
+  const meta = parseIssueMetadata((linearIssue.description as string) ?? '');
+  if (!meta) {
+    throw new Error(`Could not parse issue metadata from ${run.issue_key} description`);
+  }
+
+  const resolved = resolveProject(meta.repo);
+  if (!resolved) {
+    throw new Error(`Project not found for repo: ${meta.repo}`);
+  }
+
+  return {
+    id: linearIssue.id as string,
+    key: run.issue_key,
+    title: run.issue_title,
+    description: linearIssue.description as string,
+    designPath: meta.designPath,
+    branch: meta.branch,
+    repo: meta.repo,
+    baseBranch: resolved.project.baseBranch,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Prompt building
 // ---------------------------------------------------------------------------
 
@@ -331,6 +381,104 @@ async function streamOutput(
 }
 
 // ---------------------------------------------------------------------------
+// CI failure log fetching
+// ---------------------------------------------------------------------------
+
+async function fetchCIFailureLogs(repo: string, branch: string): Promise<string> {
+  // Find the most recent failed workflow run on this branch
+  const listProc = Bun.spawn(
+    [
+      'gh', 'run', 'list',
+      '--branch', branch,
+      '--repo', repo,
+      '--status', 'failure',
+      '--json', 'databaseId,name',
+      '--limit', '1',
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+  const [listOut, listExit] = await Promise.all([
+    new Response(listProc.stdout).text(),
+    listProc.exited,
+  ]);
+
+  if (listExit !== 0) return 'Could not fetch CI run list.';
+
+  let runs: Array<{ databaseId: number; name: string }>;
+  try {
+    runs = JSON.parse(listOut);
+  } catch {
+    return 'Could not parse CI run list.';
+  }
+
+  const firstRun = runs[0];
+  if (!firstRun) return 'No failed CI runs found.';
+
+  const runId = firstRun.databaseId;
+  const runName = firstRun.name;
+
+  // Fetch the failed logs
+  const logProc = Bun.spawn(
+    [
+      'gh', 'run', 'view', String(runId),
+      '--repo', repo,
+      '--log-failed',
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+  const [logOut, logExit] = await Promise.all([
+    new Response(logProc.stdout).text(),
+    logProc.exited,
+  ]);
+
+  if (logExit !== 0) return `CI run "${runName}" failed but logs could not be retrieved.`;
+
+  // Truncate to avoid overwhelming the agent prompt
+  const maxLen = 5000;
+  const logs = logOut.trim();
+  if (logs.length > maxLen) {
+    return `CI run "${runName}" failed. Logs (truncated):\n\n${logs.slice(-maxLen)}`;
+  }
+
+  return `CI run "${runName}" failed. Logs:\n\n${logs}`;
+}
+
+async function buildFixPrompt(
+  issue: Issue,
+  worktreePath: string,
+  fixType: FixType,
+  errorContext: string,
+  attempt: number,
+): Promise<string> {
+  // Build the base prompt (global + CLAUDE.md + design doc + issue context)
+  const basePrompt = await buildAgentPrompt(issue, worktreePath);
+
+  const typeLabel = fixType === 'merge_conflict' ? 'Merge Conflict' : 'CI/CD Failure';
+
+  const fixSection = [
+    '## Fix Task',
+    '',
+    `**Type**: ${typeLabel}`,
+    `**Attempt**: ${attempt} of ${config.maxFixRetries}`,
+    '',
+    '### Error Context',
+    '',
+    errorContext,
+    '',
+    '### Instructions',
+    '',
+    fixType === 'merge_conflict'
+      ? 'A rebase is in progress and conflict markers are present in the working tree. Resolve all conflicts in the affected files, then stage and continue the rebase:\n1. Edit each conflicted file to resolve the conflict markers (<<<<<<< / ======= / >>>>>>>).\n2. Run `git add <file>` for each resolved file.\n3. Run `git rebase --continue` to complete the rebase.\n4. Do NOT run `git commit` — the rebase continuation handles the commit.'
+      : 'Fix the CI/CD failure described above. Read the error logs carefully, identify the root cause, make the necessary code changes, and commit the fix.',
+    '',
+    '- Do not push — the orchestrator handles git push.',
+    `- Reference the issue key in your commit message: [${issue.key}] fix: description`,
+  ].join('\n');
+
+  return basePrompt + '\n\n---\n\n' + fixSection;
+}
+
+// ---------------------------------------------------------------------------
 // Agent execution
 // ---------------------------------------------------------------------------
 
@@ -346,7 +494,9 @@ export async function executeRun(
 
   try {
     // Update Linear and DB: In Progress
-    updateLinearStatus(issue.key, 'In Progress');
+    if (!run.is_fix) {
+      updateLinearStatus(issue.key, 'In Progress');
+    }
     updateRunStatus(runId, 'running', { started_at: new Date().toISOString() });
 
     // Broadcast the running transition to SSE clients
@@ -371,33 +521,59 @@ export async function executeRun(
     await initWorktree(worktreePath, project.init, runId, bufferLog);
 
     // Build prompt
-    let reviewFeedback: string | undefined;
-    let prInstructions = '';
+    let prompt: string;
 
-    if (run.pr_number) {
-      // Revision: fetch PR review comments via gh CLI
-      bufferLog(runId, 'system', `[runner] Fetching review comments for PR #${run.pr_number}`);
-      const ghProc = Bun.spawn(
-        [
-          'gh', 'pr', 'view', String(run.pr_number),
-          '--repo', issue.repo,
-          '--json', 'reviews,comments',
-        ],
-        { stdout: 'pipe', stderr: 'pipe' },
-      );
-      const [ghOut] = await Promise.all([
-        new Response(ghProc.stdout).text(),
-        ghProc.exited,
-      ]);
-      reviewFeedback = ghOut.trim() || undefined;
-      prInstructions =
-        `\n\n## PR Instructions\n\n` +
-        `This is a revision of PR #${run.pr_number}. ` +
-        `After committing your changes, the orchestrator will push and update the existing PR automatically. ` +
-        `Use \`gh pr review\` to understand reviewer feedback and address all requested changes.`;
+    if (run.is_fix && run.fix_type) {
+      // Fix run — use fix-specific prompt
+      let errorContext: string;
+      if (run.fix_type === 'ci_failure') {
+        errorContext = await fetchCIFailureLogs(issue.repo, issue.branch);
+      } else {
+        // Perform the rebase in the worktree so the agent sees conflict markers
+        bufferLog(runId, 'system', `[runner] Rebasing onto ${issue.baseBranch} to surface conflict markers`);
+        const rebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
+        if (rebaseResult.success) {
+          // Rebase succeeded cleanly — just force push and we're done
+          bufferLog(runId, 'system', `[runner] Rebase succeeded cleanly, force-pushing`);
+          await forcePushFromWorktree(worktreePath, issue.branch);
+          updateRunStatus(runId, 'success', { completed_at: new Date().toISOString(), pr_url: `https://github.com/${issue.repo}/pull/${run.pr_number}`, pr_number: run.pr_number });
+          clearFixTracking(issue.repo, run.pr_number!, run.fix_type);
+          bufferLog(runId, 'system', `[runner] Conflict resolved via clean rebase`);
+          return;
+        }
+        // Rebase failed — conflict markers are now in the worktree for the agent
+        errorContext = `Automatic rebase onto ${issue.baseBranch} failed. Conflict markers are present in the working tree.\n\n${rebaseResult.conflictOutput ?? ''}`;
+      }
+      prompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt);
+    } else {
+      let reviewFeedback: string | undefined;
+      let prInstructions = '';
+
+      if (run.pr_number) {
+        // Revision: fetch PR review comments via gh CLI
+        bufferLog(runId, 'system', `[runner] Fetching review comments for PR #${run.pr_number}`);
+        const ghProc = Bun.spawn(
+          [
+            'gh', 'pr', 'view', String(run.pr_number),
+            '--repo', issue.repo,
+            '--json', 'reviews,comments',
+          ],
+          { stdout: 'pipe', stderr: 'pipe' },
+        );
+        const [ghOut] = await Promise.all([
+          new Response(ghProc.stdout).text(),
+          ghProc.exited,
+        ]);
+        reviewFeedback = ghOut.trim() || undefined;
+        prInstructions =
+          `\n\n## PR Instructions\n\n` +
+          `This is a revision of PR #${run.pr_number}. ` +
+          `After committing your changes, the orchestrator will push and update the existing PR automatically. ` +
+          `Use \`gh pr review\` to understand reviewer feedback and address all requested changes.`;
+      }
+
+      prompt = (await buildAgentPrompt(issue, worktreePath, reviewFeedback)) + prInstructions;
     }
-
-    const prompt = (await buildAgentPrompt(issue, worktreePath, reviewFeedback)) + prInstructions;
 
     bufferLog(runId, 'system', `[runner] Spawning claude agent`);
 
@@ -438,7 +614,9 @@ export async function executeRun(
         error_summary: `Agent timed out after ${config.agentTimeoutMs}ms`,
         completed_at: new Date().toISOString(),
       });
-      updateLinearStatus(issue.key, 'Failed');
+      if (!run.is_fix) {
+        updateLinearStatus(issue.key, 'Failed');
+      }
       commentOnIssue(issue.key, `Agent timed out after ${config.agentTimeoutMs / 1000}s.`);
       return;
     }
@@ -450,9 +628,14 @@ export async function executeRun(
       throw new Error(`Claude agent exited with code ${exitCode}`);
     }
 
-    // Push commits
-    bufferLog(runId, 'system', `[runner] Pushing branch ${issue.branch}`);
-    await pushFromWorktree(worktreePath, issue.branch);
+    // Push commits (force-push for merge conflict fixes since rebase rewrites history)
+    if (run.is_fix && run.fix_type === 'merge_conflict') {
+      bufferLog(runId, 'system', `[runner] Force-pushing branch ${issue.branch} (post-rebase)`);
+      await forcePushFromWorktree(worktreePath, issue.branch);
+    } else {
+      bufferLog(runId, 'system', `[runner] Pushing branch ${issue.branch}`);
+      await pushFromWorktree(worktreePath, issue.branch);
+    }
 
     // Create or update PR
     let prUrl: string;
@@ -472,13 +655,23 @@ export async function executeRun(
       bufferLog(runId, 'system', `[runner] Created PR: ${prUrl}`);
     }
 
+    // Extract PR number from URL for review polling
+    const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
+    const prNum = prNumberMatch?.[1] ? parseInt(prNumberMatch[1], 10) : null;
+
     // Update DB and Linear to success
     updateRunStatus(runId, 'success', {
       pr_url: prUrl,
+      pr_number: prNum,
       completed_at: new Date().toISOString(),
     });
-    updateLinearStatus(issue.key, 'In Review');
-    commentOnIssue(issue.key, `PR ready for review: ${prUrl}`);
+    if (run.is_fix) {
+      commentOnIssue(issue.key, `Fix applied (${run.fix_type}, attempt ${run.fix_attempt}): ${prUrl}`);
+      if (run.fix_type) clearFixTracking(issue.repo, prNum ?? run.pr_number!, run.fix_type);
+    } else {
+      updateLinearStatus(issue.key, 'In Review');
+      commentOnIssue(issue.key, `PR ready for review: ${prUrl}`);
+    }
 
     bufferLog(runId, 'system', `[runner] Run ${runId} completed successfully`);
 
@@ -494,8 +687,12 @@ export async function executeRun(
       error_summary: errorMessage.slice(0, 500),
       completed_at: new Date().toISOString(),
     });
-    updateLinearStatus(issue.key, 'Failed');
-    commentOnIssue(issue.key, `Agent run failed: ${errorMessage.slice(0, 200)}`);
+    if (run.is_fix) {
+      commentOnIssue(issue.key, `Fix attempt failed (${run.fix_type}, attempt ${run.fix_attempt}): ${errorMessage.slice(0, 200)}`);
+    } else {
+      updateLinearStatus(issue.key, 'Failed');
+      commentOnIssue(issue.key, `Agent run failed: ${errorMessage.slice(0, 200)}`);
+    }
 
     const updatedRun = getRun(runId);
     if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
@@ -529,7 +726,7 @@ export function enqueueWithIssue(run: Run, issue: Issue): void {
   enqueue(run);
 }
 
-export function enqueueRevision(originalRun: Run, prNumber: number): void {
+export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue): string {
   const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
     id: ulid(),
     project: originalRun.project,
@@ -540,6 +737,9 @@ export function enqueueRevision(originalRun: Run, prNumber: number): void {
     worktree_path: originalRun.worktree_path,
     status: 'queued',
     is_revision: 1,
+    is_fix: 0,
+    fix_type: null,
+    fix_attempt: 0,
     pr_number: prNumber,
     agent_pid: null,
     error_summary: null,
@@ -551,9 +751,50 @@ export function enqueueRevision(originalRun: Run, prNumber: number): void {
   // getRun to get the full record with timestamps
   const fullRun = getRun(newRun.id);
   if (fullRun) {
-    enqueue(fullRun);
+    enqueueWithIssue(fullRun, issue);
     broadcastSSE({ type: 'run_update', run: fullRun });
   }
+
+  return newRun.id;
+}
+
+export function enqueueFix(
+  originalRun: Run,
+  prNumber: number,
+  issue: Issue,
+  fixType: FixType,
+  attempt: number,
+): string {
+  const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
+    id: ulid(),
+    project: originalRun.project,
+    issue_id: originalRun.issue_id,
+    issue_key: originalRun.issue_key,
+    issue_title: originalRun.issue_title,
+    branch: originalRun.branch,
+    worktree_path: originalRun.worktree_path,
+    status: 'queued',
+    is_revision: 0,
+    is_fix: 1,
+    fix_type: fixType,
+    fix_attempt: attempt,
+    pr_number: prNumber,
+    agent_pid: null,
+    error_summary: null,
+    pr_url: null,
+  };
+
+  insertRun(newRun);
+
+  const fullRun = getRun(newRun.id);
+  if (fullRun) {
+    enqueueWithIssue(fullRun, issue);
+    broadcastSSE({ type: 'run_update', run: fullRun });
+  }
+
+  upsertFixTracking(issue.repo, prNumber, fixType, newRun.id);
+
+  return newRun.id;
 }
 
 export async function tick(): Promise<void> {
@@ -598,6 +839,187 @@ export async function tick(): Promise<void> {
       running--;
       issueMap.delete(run.id);
     });
+}
+
+// ---------------------------------------------------------------------------
+// PR review polling
+// ---------------------------------------------------------------------------
+
+export async function pollReviews(): Promise<void> {
+  const watchable = getWatchableRuns(config.reviewWatchMaxAgeDays);
+  if (watchable.length === 0) return;
+
+  const projects = loadProjects();
+
+  for (const run of watchable) {
+    try {
+      const projectConfig = projects[run.project];
+      if (!projectConfig?.repo) continue;
+      const repo = projectConfig.repo;
+
+      // Skip if there's already a queued/running revision for this branch
+      const existing = getRunByBranch(run.branch);
+      if (existing && (existing.status === 'queued' || existing.status === 'running')) {
+        continue;
+      }
+
+      // Fetch PR state + reviews via gh CLI
+      const ghProc = Bun.spawn(
+        [
+          'gh', 'pr', 'view', String(run.pr_number),
+          '--repo', repo,
+          '--json', 'state,reviews',
+        ],
+        { stdout: 'pipe', stderr: 'pipe' },
+      );
+      const [ghOut, ghExit] = await Promise.all([
+        new Response(ghProc.stdout).text(),
+        ghProc.exited,
+      ]);
+
+      if (ghExit !== 0) continue;
+
+      let prData: { state?: string; reviews?: Array<Record<string, unknown>> };
+      try {
+        prData = JSON.parse(ghOut);
+      } catch {
+        continue;
+      }
+
+      // Stop watching closed/merged PRs
+      if (prData.state !== 'OPEN') continue;
+
+      for (const review of prData.reviews ?? []) {
+        const reviewId = review.id as string | undefined;
+        if (!reviewId) continue;
+
+        const state = ((review.state as string) ?? '').toLowerCase();
+        const body = ((review.body as string) ?? '').trim();
+        const reviewAuthor = (review.author as Record<string, unknown>)?.login as string | undefined;
+
+        // Skip self-reviews to prevent loops
+        if (reviewAuthor === config.githubUsername) continue;
+
+        // Skip already processed reviews
+        if (isReviewProcessed(reviewId)) continue;
+
+        // Determine if actionable
+        const isActionable =
+          state === 'changes_requested' ||
+          (state === 'commented' && body.length >= config.reviewMinBodyLength);
+
+        if (!isActionable) continue;
+
+        // Reconstruct Issue from the original run
+        const issue = await reconstructIssueFromRun(run);
+
+        // Enqueue revision
+        const revisionRunId = enqueueRevision(run, run.pr_number!, issue);
+
+        // Mark review as processed
+        markReviewProcessed(reviewId, run.pr_number!, repo, revisionRunId);
+
+        console.log(
+          `[reviewer] Enqueued revision ${revisionRunId} for PR #${run.pr_number} ` +
+          `(review ${reviewId}, state: ${state})`
+        );
+
+        // Only process one new review per PR per cycle
+        break;
+      }
+    } catch (err) {
+      console.error(`[reviewer] Error checking PR for run ${run.id}:`, err);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-fix polling
+// ---------------------------------------------------------------------------
+
+export async function pollFixable(prStatuses?: Map<string, import('./notify.ts').GHPRView[]>): Promise<void> {
+  const allStatuses = prStatuses ?? await fetchAllPRStatuses();
+
+  for (const [repo, prs] of allStatuses) {
+    for (const pr of prs) {
+      try {
+        const fixNeeded = checkFixNeeded(pr);
+        if (!fixNeeded) {
+          // PR is healthy — clear any existing fix tracking
+          clearFixTracking(repo, pr.number, 'merge_conflict');
+          clearFixTracking(repo, pr.number, 'ci_failure');
+          continue;
+        }
+
+        const { fixType } = fixNeeded;
+
+        // Only fix PRs created by the orchestrator
+        const resolved = resolveProject(repo);
+        const originalRun = getRunByPRNumber(pr.number, resolved?.key);
+        if (!originalRun) continue;
+
+        // Skip if there's already a queued/running fix for this branch
+        const existingRun = getRunByBranch(pr.headRefName);
+        if (existingRun && (existingRun.status === 'queued' || existingRun.status === 'running')) {
+          continue;
+        }
+
+        // Check fix tracking
+        const tracking = getFixTracking(repo, pr.number, fixType);
+
+        if (tracking?.exhausted) continue;
+
+        const currentAttempt = (tracking?.attempt_count ?? 0) + 1;
+
+        if (currentAttempt > config.maxFixRetries) {
+          markFixExhausted(repo, pr.number, fixType);
+          await sendFixExhaustedNotification(
+            repo, pr.number, pr.title, pr.url, fixType, config.maxFixRetries,
+          );
+          console.log(`[fixer] Fix attempts exhausted for PR #${pr.number} in ${repo} (${fixType})`);
+          continue;
+        }
+
+        // Reconstruct issue from original run
+        const issue = await reconstructIssueFromRun(originalRun);
+
+        if (fixType === 'merge_conflict') {
+          // Try automatic rebase first
+          console.log(`[fixer] Attempting rebase for PR #${pr.number} in ${repo}`);
+          if (!resolved) continue;
+
+          const projectPath = await ensureProjectLocal(resolved.project, resolved.key);
+          const slug = ulid().slice(-6).toLowerCase();
+          const worktreePath = await setupWorktree(projectPath, issue.branch, issue.key, slug);
+
+          try {
+            const rebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
+
+            if (rebaseResult.success) {
+              // Rebase succeeded cleanly — force push
+              await forcePushFromWorktree(worktreePath, issue.branch);
+              clearFixTracking(repo, pr.number, fixType);
+              console.log(`[fixer] Auto-rebase succeeded for PR #${pr.number} in ${repo}`);
+            } else {
+              // Rebase failed — abort and spawn agent
+              await abortRebase(worktreePath);
+              const fixRunId = enqueueFix(originalRun, pr.number, issue, fixType, currentAttempt);
+              console.log(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+            }
+          } finally {
+            cleanupWorktree(projectPath, worktreePath).catch(() => {});
+          }
+        } else {
+          // CI failure — spawn agent (it will fetch CI logs in its prompt)
+          console.log(`[fixer] CI failure detected for PR #${pr.number} in ${repo}`);
+          const fixRunId = enqueueFix(originalRun, pr.number, issue, 'ci_failure', currentAttempt);
+          console.log(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+        }
+      } catch (err) {
+        console.error(`[fixer] Error checking PR #${pr.number} in ${repo}:`, err);
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -667,6 +1089,9 @@ export function startRunner(): void {
           worktree_path: worktreePath,
           status: 'queued',
           is_revision: 0,
+          is_fix: 0,
+          fix_type: null,
+          fix_attempt: 0,
           pr_number: null,
           agent_pid: null,
           error_summary: null,
@@ -690,6 +1115,26 @@ export function startRunner(): void {
     }
   }, config.pollIntervalMs);
 
+  // Poll GitHub for new PR reviews
+  setInterval(async () => {
+    try {
+      await pollReviews();
+    } catch (err) {
+      console.error('[reviewer] Poll error:', err);
+    }
+  }, config.reviewPollIntervalMs);
+
+  // Unified PR polling: merge-readiness notifications + auto-fix detection
+  setInterval(async () => {
+    try {
+      const prStatuses = await fetchAllPRStatuses();
+      await pollMergeReadiness(prStatuses);
+      await pollFixable(prStatuses);
+    } catch (err) {
+      console.error('[notify/fixer] Poll error:', err);
+    }
+  }, config.fixPollIntervalMs);
+
   // Tick every 5 seconds to dispatch queued runs
   setInterval(() => {
     tick().catch((err) => console.error('[runner] tick error:', err));
@@ -697,7 +1142,10 @@ export function startRunner(): void {
 
   console.log(
     `[runner] Running. Poll interval: ${config.pollIntervalMs}ms, ` +
+    `review poll: ${config.reviewPollIntervalMs}ms, ` +
+    `fix poll: ${config.fixPollIntervalMs}ms, ` +
     `max concurrent: ${config.maxConcurrentAgents}, ` +
+    `max fix retries: ${config.maxFixRetries}, ` +
     `timeout: ${config.agentTimeoutMs}ms`,
   );
 }
