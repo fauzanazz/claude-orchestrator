@@ -467,6 +467,8 @@ function connectSSE() {
   es.addEventListener('open', () => {
     setConnected(true);
     if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+    // Re-fetch full state to recover any events missed during disconnect
+    fetchRuns();
   });
 
   es.addEventListener('message', e => {

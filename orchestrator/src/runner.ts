@@ -349,6 +349,10 @@ export async function executeRun(
     updateLinearStatus(issue.key, 'In Progress');
     updateRunStatus(runId, 'running', { started_at: new Date().toISOString() });
 
+    // Broadcast the running transition to SSE clients
+    const runningRun = getRun(runId);
+    if (runningRun) broadcastSSE({ type: 'run_update', run: runningRun });
+
     bufferLog(runId, 'system', `[runner] Starting run ${runId} for ${issue.key}`);
 
     // Ensure project is cloned locally
@@ -409,6 +413,10 @@ export async function executeRun(
 
     // Update DB with agent PID
     updateRunStatus(runId, 'running', { agent_pid: agentProc.pid });
+
+    // Broadcast PID update
+    const pidRun = getRun(runId);
+    if (pidRun) broadcastSSE({ type: 'run_update', run: pidRun });
 
     // Race: stream output vs timeout
     const timeoutPromise = new Promise<'timeout'>((resolve) =>
