@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --path)
-      if [[ $# -lt 2 ]]; then
+      if [[ $# -lt 2 || "$2" == -* ]]; then
         echo "Error: --path requires a value" >&2
         exit 1
       fi
@@ -26,7 +26,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --team)
-      if [[ $# -lt 2 ]]; then
+      if [[ $# -lt 2 || "$2" == -* ]]; then
         echo "Error: --team requires a value" >&2
         exit 1
       fi
