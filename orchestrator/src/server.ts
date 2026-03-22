@@ -59,6 +59,18 @@ export function broadcastSSE(event: SSEEvent): void {
   }
 }
 
+// SSE heartbeat — keeps connections alive, lets clients detect dead connections
+setInterval(() => {
+  const heartbeat = new TextEncoder().encode(': heartbeat\n\n');
+  for (const controller of sseClients) {
+    try {
+      controller.enqueue(heartbeat);
+    } catch {
+      sseClients.delete(controller);
+    }
+  }
+}, 15_000);
+
 // ---------------------------------------------------------------------------
 // Hono app
 // ---------------------------------------------------------------------------
@@ -178,14 +190,16 @@ app.post('/api/runs/:id/retry', async (c) => {
 
 // GET /api/events — SSE endpoint
 app.get('/api/events', (_c) => {
+  let ctrl: ReadableStreamDefaultController;
+
   const stream = new ReadableStream({
     start(controller) {
+      ctrl = controller;
       sseClients.add(controller);
-      // Send an initial comment to establish the connection
       controller.enqueue(new TextEncoder().encode(': connected\n\n'));
     },
-    cancel(controller) {
-      sseClients.delete(controller as ReadableStreamDefaultController);
+    cancel() {
+      sseClients.delete(ctrl);
     },
   });
 
