@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+PLANNER_DIR="$(dirname "$(realpath "$0")")"
+
+# Template paths into system prompt
+PROMPT=$(sed \
+  -e "s|\\\$PLANNER_DIR|$PLANNER_DIR|g" \
+  -e "s|\\\$PROJECTS_JSON|$PLANNER_DIR/projects.json|g" \
+  "$PLANNER_DIR/PLANNER.md")
+
+# Inline the design skill
+SKILL=$(cat "$PLANNER_DIR/skills/design.md")
+PROMPT="${PROMPT//<DESIGN_SKILL>/$SKILL}"
+
+exec claude --system-prompt "$PROMPT" "$@"

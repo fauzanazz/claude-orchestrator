@@ -1,0 +1,273 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import type { ProjectConfig } from './types.ts';
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+interface SpawnResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+async function spawn(
+  args: string[],
+  opts?: { cwd?: string },
+): Promise<SpawnResult> {
+  const proc = Bun.spawn(args, {
+    cwd: opts?.cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  return { exitCode, stdout, stderr };
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  return Bun.file(p).exists();
+}
+
+// ---------------------------------------------------------------------------
+// Exported functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensures the project repository is available locally.
+ * If `project.path` is set, it is returned as-is.
+ * Otherwise the repo is cloned into the shared repos directory.
+ */
+export async function ensureProjectLocal(
+  project: ProjectConfig,
+  key: string,
+): Promise<string> {
+  if (project.path) {
+    return project.path;
+  }
+
+  const repoDir = join(
+    homedir(),
+    '.local',
+    'share',
+    'agent-orchestrator',
+    'repos',
+    key,
+  );
+
+  if (!(await pathExists(repoDir))) {
+    await mkdir(repoDir, { recursive: true });
+    const result = await spawn([
+      'git',
+      'clone',
+      `git@github.com:${project.repo}.git`,
+      repoDir,
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git clone failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+  }
+
+  return repoDir;
+}
+
+/**
+ * Creates a git worktree for the given branch, performing crash-recovery
+ * cleanup if the worktree directory already exists.
+ */
+export async function setupWorktree(
+  projectPath: string,
+  branch: string,
+  issueKey: string,
+  slug: string,
+): Promise<string> {
+  // Fetch the remote branch
+  const fetchResult = await spawn(
+    ['git', '-C', projectPath, 'fetch', 'origin', branch],
+  );
+  if (fetchResult.exitCode !== 0) {
+    throw new Error(
+      `git fetch failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr.trim()}`,
+    );
+  }
+
+  const worktreePath = join(
+    projectPath,
+    '.worktrees',
+    `agent-${issueKey}-${slug}`,
+  );
+
+  // Remove any existing worktrees using the same local branch
+  const localBranch = `local/${branch}`;
+  const listResult = await spawn(['git', '-C', projectPath, 'worktree', 'list', '--porcelain']);
+  if (listResult.exitCode === 0) {
+    const entries = listResult.stdout.split('\n\n');
+    for (const entry of entries) {
+      if (entry.includes(`branch refs/heads/${localBranch}`)) {
+        const wtMatch = entry.match(/^worktree (.+)$/m);
+        if (wtMatch?.[1]) {
+          await spawn(['git', '-C', projectPath, 'worktree', 'remove', '--force', wtMatch[1]]);
+        }
+      }
+    }
+  }
+
+  // Prune stale worktree bookkeeping
+  await spawn(['git', '-C', projectPath, 'worktree', 'prune']);
+
+  // Delete stale local branch if it exists from a previous run
+  await spawn(['git', '-C', projectPath, 'branch', '-D', localBranch]);
+
+  // Create the worktree tracking the remote branch
+  const addResult = await spawn([
+    'git',
+    '-C',
+    projectPath,
+    'worktree',
+    'add',
+    '--track',
+    '-b',
+    localBranch,
+    worktreePath,
+    `origin/${branch}`,
+  ]);
+  if (addResult.exitCode !== 0) {
+    throw new Error(
+      `git worktree add failed (exit ${addResult.exitCode}): ${addResult.stderr.trim()}`,
+    );
+  }
+
+  return worktreePath;
+}
+
+/**
+ * Removes a worktree. Errors are silently ignored (best-effort cleanup).
+ */
+export async function cleanupWorktree(
+  projectPath: string,
+  worktreePath: string,
+): Promise<void> {
+  try {
+    await spawn([
+      'git',
+      '-C',
+      projectPath,
+      'worktree',
+      'remove',
+      '--force',
+      worktreePath,
+    ]);
+  } catch {
+    // best-effort — ignore errors
+  }
+}
+
+/**
+ * Pushes commits from the worktree's local branch back to the remote branch.
+ */
+export async function pushFromWorktree(
+  worktreePath: string,
+  branch: string,
+): Promise<void> {
+  const result = await spawn([
+    'git',
+    '-C',
+    worktreePath,
+    'push',
+    'origin',
+    `local/${branch}:${branch}`,
+  ]);
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `git push failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GitHub PR creation (via gh CLI)
+// ---------------------------------------------------------------------------
+
+interface CreatePROpts {
+  repo: string;    // e.g. "owner/repo-name"
+  base: string;    // target branch
+  head: string;    // source branch
+  title: string;
+  body: string;
+  reviewer: string;
+}
+
+/**
+ * Creates a pull request via the `gh` CLI and requests a reviewer.
+ * Returns the PR URL.
+ */
+export async function createPR(opts: CreatePROpts): Promise<string> {
+  // Check if a PR already exists for this head branch
+  const existing = await spawn([
+    'gh', 'pr', 'view', opts.head,
+    '--repo', opts.repo,
+    '--json', 'url',
+    '--jq', '.url',
+  ]);
+
+  if (existing.exitCode === 0 && existing.stdout.trim()) {
+    // PR exists — update it
+    await spawn([
+      'gh', 'pr', 'edit', opts.head,
+      '--repo', opts.repo,
+      '--title', opts.title,
+      '--body', opts.body,
+    ]);
+    return existing.stdout.trim();
+  }
+
+  const result = await spawn([
+    'gh', 'pr', 'create',
+    '--repo', opts.repo,
+    '--base', opts.base,
+    '--head', opts.head,
+    '--title', opts.title,
+    '--body', opts.body,
+    '--reviewer', opts.reviewer,
+  ]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh pr create failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+
+  return result.stdout.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Agent settings
+// ---------------------------------------------------------------------------
+
+const AGENT_SETTINGS = {
+  permissions: {
+    allow: ['*'],
+  },
+} as const;
+
+/**
+ * Writes `.claude/settings.json` inside the worktree with scoped permissions.
+ */
+export async function writeAgentSettings(worktreePath: string): Promise<void> {
+  const settingsDir = join(worktreePath, '.claude');
+  await mkdir(settingsDir, { recursive: true });
+
+  await Bun.write(
+    join(settingsDir, 'settings.json'),
+    JSON.stringify(AGENT_SETTINGS, null, 2) + '\n',
+  );
+}

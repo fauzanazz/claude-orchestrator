@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Orchestrator</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #1a1a1a;
+  --bg2: #222;
+  --bg3: #2a2a2a;
+  --border: #333;
+  --text: #d4d4d4;
+  --text-dim: #666;
+  --text-muted: #888;
+  --blue: #4a9eff;
+  --green: #4caf50;
+  --red: #e05555;
+  --gray: #888;
+  --yellow: #e0a840;
+  --font: ui-monospace, 'Cascadia Code', 'Fira Mono', 'Consolas', monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+/* Header */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+}
+
+header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.02em; }
+
+#conn-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+#conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--gray);
+  transition: background 0.3s;
+}
+#conn-dot.connected    { background: var(--green); }
+#conn-dot.disconnected { background: var(--red); }
+
+/* Table wrapper */
+#table-wrap {
+  overflow-x: auto;
+  padding: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 680px;
+}
+
+thead th {
+  background: var(--bg3);
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+tbody tr:hover { background: var(--bg3); }
+
+td {
+  padding: 7px 10px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.col-project  { max-width: 110px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.col-key      { color: var(--text-muted); }
+.col-title    { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.col-rev      { color: var(--text-muted); text-align: center; }
+.col-status   { white-space: nowrap; }
+.col-duration { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.col-actions  { white-space: nowrap; }
+
+/* Status */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dot.queued   { background: var(--gray); }
+.dot.running  { background: var(--blue); animation: pulse 1.2s ease-in-out infinite; }
+.dot.success  { background: var(--green); }
+.dot.failed   { background: var(--red); }
+.dot.review   { background: var(--yellow); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.status-label.queued  { color: var(--gray); }
+.status-label.running { color: var(--blue); }
+.status-label.success { color: var(--green); }
+.status-label.failed  { color: var(--red); }
+.status-label.review  { color: var(--yellow); }
+
+/* Buttons */
+.btn {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: none;
+  margin-right: 4px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn:hover              { border-color: var(--text-muted); color: #fff; }
+.btn.retry              { color: var(--red); border-color: var(--red); }
+.btn.retry:hover        { background: var(--red); color: #fff; }
+.btn.logs               { color: var(--text-muted); }
+.btn.logs:hover         { color: #fff; }
+
+/* Modal */
+#modal-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+#modal-overlay.open { display: flex; }
+
+#modal {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: min(860px, 95vw);
+  height: min(520px, 85vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+#modal-title { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+#modal-close {
+  background: none; border: none; color: var(--text-muted);
+  font-size: 16px; cursor: pointer; padding: 0 4px; line-height: 1;
+}
+#modal-close:hover { color: #fff; }
+
+#log-output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: #111;
+}
+
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-line.stderr { color: #e07070; }
+.log-line.system { color: var(--text-dim); font-style: italic; }
+.log-line.stdout { color: var(--text); }
+
+#empty-row td {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 32px;
+}
+
+/* Filter bar */
+#filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg2);
+  font-size: 12px;
+}
+
+#filter-bar label {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#filter-bar select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#filter-bar select:hover { border-color: var(--text-muted); }
+#filter-bar select:focus { outline: none; border-color: var(--blue); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Agent Orchestrator</h1>
+  <div id="conn-status">
+    <div id="conn-dot"></div>
+    <span id="conn-label">Connecting...</span>
+  </div>
+</header>
+
+<div id="filter-bar">
+  <label for="filter-status">Status</label>
+  <select id="filter-status">
+    <option value="">All</option>
+    <option value="queued">Queued</option>
+    <option value="running">Running</option>
+    <option value="success">Success</option>
+    <option value="failed">Failed</option>
+  </select>
+  <label for="filter-project">Project</label>
+  <select id="filter-project">
+    <option value="">All</option>
+  </select>
+</div>
+
+<div id="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="col-project">Project</th>
+        <th class="col-key">Key</th>
+        <th class="col-title">Title</th>
+        <th class="col-rev">Rev</th>
+        <th class="col-status">Status</th>
+        <th class="col-duration">Duration</th>
+        <th class="col-actions">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="runs-body">
+      <tr id="empty-row"><td colspan="7">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div id="modal">
+    <div id="modal-header">
+      <span id="modal-title">Logs</span>
+      <button id="modal-close" aria-label="Close">&times;</button>
+    </div>
+    <div id="log-output"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ── State ────────────────────────────────────────────────────────────────────
+const runs = new Map();          // id -> run object
+let activeLogRunId = null;       // run id whose logs are showing
+let timerHandle = null;
+let sseSource = null;
+let sseReconnectTimer = null;
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const tbody       = document.getElementById('runs-body');
+const emptyRow    = document.getElementById('empty-row');
+const connDot     = document.getElementById('conn-dot');
+const connLabel   = document.getElementById('conn-label');
+const modalOverlay = document.getElementById('modal-overlay');
+const modalTitle  = document.getElementById('modal-title');
+const logOutput   = document.getElementById('log-output');
+const modalClose  = document.getElementById('modal-close');
+const filterStatus  = document.getElementById('filter-status');
+const filterProject = document.getElementById('filter-project');
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function fmt(seconds) {
+  if (seconds == null || seconds < 0) return '\u2014';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function elapsed(startedAt) {
+  if (!startedAt) return null;
+  return (Date.now() - new Date(startedAt).getTime()) / 1000;
+}
+
+function totalDuration(run) {
+  if (!run.started_at) return null;
+  const end = run.finished_at ? new Date(run.finished_at) : Date.now();
+  return (end - new Date(run.started_at).getTime()) / 1000;
+}
+
+function statusClass(status) {
+  const map = { queued: 'queued', running: 'running', success: 'success',
+                failed: 'failed', review: 'review' };
+  return map[status] || 'queued';
+}
+
+function statusLabel(status) {
+  const map = { queued: 'Queued', running: 'Running', success: 'Success',
+                failed: 'Failed', review: 'Review' };
+  return map[status] || status;
+}
+
+// Compute revision number for a run (how many revisions of same issue_key came before it)
+function revNumber(run) {
+  if (!run.is_revision) return '';
+  const siblings = [...runs.values()].filter(r => r.issue_key === run.issue_key);
+  // sort by created_at or id
+  siblings.sort((a, b) => (a.created_at || a.id) < (b.created_at || b.id) ? -1 : 1);
+  const idx = siblings.findIndex(r => r.id === run.id);
+  return `#${idx + 1}`;
+}
+
+// ── Render ───────────────────────────────────────────────────────────────────
+function renderRow(run) {
+  const sc   = statusClass(run.status);
+  const rev  = revNumber(run);
+  const dur  = run.status === 'running'
+    ? fmt(elapsed(run.started_at))
+    : fmt(totalDuration(run));
+
+  const actions = buildActions(run);
+
+  let tr = document.getElementById(`row-${run.id}`);
+  if (!tr) {
+    tr = document.createElement('tr');
+    tr.id = `row-${run.id}`;
+    tbody.insertBefore(tr, tbody.firstChild);
+  }
+
+  tr.innerHTML = `
+    <td class="col-project" title="${esc(run.project || '')}">${esc(run.project || '')}</td>
+    <td class="col-key">${esc(run.issue_key || '')}</td>
+    <td class="col-title" title="${esc(run.title || '')}">${esc(run.title || '')}</td>
+    <td class="col-rev">${esc(rev)}</td>
+    <td class="col-status">
+      <span class="status">
+        <span class="dot ${sc}"></span>
+        <span class="status-label ${sc}">${statusLabel(run.status)}</span>
+      </span>
+    </td>
+    <td class="col-duration" data-run-id="${run.id}">${dur}</td>
+    <td class="col-actions">${actions}</td>
+  `;
+
+  // attach event handlers
+  const logsBtn = tr.querySelector('.btn.logs');
+  if (logsBtn) logsBtn.addEventListener('click', () => openLogs(run.id));
+
+  const retryBtn = tr.querySelector('.btn.retry');
+  if (retryBtn) retryBtn.addEventListener('click', () => retryRun(run.id));
+
+  return tr;
+}
+
+function buildActions(run) {
+  let html = '';
+  if (run.pr_url) {
+    html += `<a class="btn" href="${esc(run.pr_url)}" target="_blank" rel="noopener">[PR]</a>`;
+  }
+  if (run.status === 'failed') {
+    html += `<button class="btn retry">[Retry]</button>`;
+  }
+  html += `<button class="btn logs">[Logs]</button>`;
+  return html;
+}
+
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function updateEmptyState() {
+  if (runs.size === 0) {
+    if (!emptyRow.parentNode) tbody.appendChild(emptyRow);
+    emptyRow.querySelector('td').textContent = 'No runs yet.';
+  } else {
+    emptyRow.remove();
+  }
+}
+
+function upsertRun(run) {
+  runs.set(run.id, run);
+  renderRow(run);
+  updateEmptyState();
+}
+
+// ── Duration ticker ──────────────────────────────────────────────────────────
+function tick() {
+  runs.forEach(run => {
+    if (run.status !== 'running') return;
+    const cell = document.querySelector(`[data-run-id="${run.id}"]`);
+    if (cell) cell.textContent = fmt(elapsed(run.started_at));
+  });
+}
+
+function startTicker() {
+  if (timerHandle) return;
+  timerHandle = setInterval(tick, 1000);
+}
+
+// ── SSE ──────────────────────────────────────────────────────────────────────
+function setConnected(ok) {
+  connDot.className = ok ? 'connected' : 'disconnected';
+  connLabel.textContent = ok ? 'Connected' : 'Disconnected';
+}
+
+function connectSSE() {
+  if (sseSource) { sseSource.close(); sseSource = null; }
+
+  const es = new EventSource('/api/events');
+  sseSource = es;
+
+  es.addEventListener('open', () => {
+    setConnected(true);
+    if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
+  });
+
+  es.addEventListener('message', e => {
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+
+    if (data.type === 'run_update' && data.run) {
+      upsertRun(data.run);
+    } else if (data.type === 'log') {
+      if (activeLogRunId && data.runId === activeLogRunId) {
+        appendLogLine(data.stream, data.content);
+      }
+    }
+  });
+
+  es.addEventListener('error', () => {
+    setConnected(false);
+    es.close();
+    sseSource = null;
+    // exponential-ish backoff capped at 10s
+    const delay = sseReconnectTimer ? 5000 : 2000;
+    sseReconnectTimer = setTimeout(connectSSE, delay);
+  });
+}
+
+// ── Filters ──────────────────────────────────────────────────────────────────
+const knownProjects = new Set();
+
+function populateProjectFilter(list) {
+  list.forEach(r => { if (r.project) knownProjects.add(r.project); });
+  const current = filterProject.value;
+  filterProject.innerHTML = '<option value="">All</option>';
+  [...knownProjects].sort().forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    filterProject.appendChild(opt);
+  });
+  filterProject.value = current;
+}
+
+function applyFilters() {
+  const status = filterStatus.value;
+  const project = filterProject.value;
+  runs.forEach(run => {
+    const row = document.getElementById(`row-${run.id}`);
+    if (!row) return;
+    const show = (!status || run.status === status) && (!project || run.project === project);
+    row.style.display = show ? '' : 'none';
+  });
+  const visibleCount = [...runs.values()].filter(run => {
+    const row = document.getElementById(`row-${run.id}`);
+    return row && row.style.display !== 'none';
+  }).length;
+  if (visibleCount === 0 && runs.size > 0) {
+    if (!emptyRow.parentNode) tbody.appendChild(emptyRow);
+    emptyRow.querySelector('td').textContent = 'No matching runs.';
+    emptyRow.style.display = '';
+  } else {
+    updateEmptyState();
+  }
+}
+
+filterStatus.addEventListener('change', applyFilters);
+filterProject.addEventListener('change', applyFilters);
+
+// ── REST ─────────────────────────────────────────────────────────────────────
+async function fetchRuns() {
+  try {
+    const res = await fetch('/api/runs');
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.runs || []);
+    list.sort((a, b) => (a.created_at || a.id) < (b.created_at || b.id) ? -1 : 1);
+    list.forEach(upsertRun);
+    populateProjectFilter(list);
+    applyFilters();
+  } catch (err) {
+    console.error('Failed to fetch runs:', err);
+    emptyRow.querySelector('td').textContent = 'Failed to load runs.';
+  }
+}
+
+async function retryRun(id) {
+  try {
+    const res = await fetch(`/api/runs/${id}/retry`, { method: 'POST' });
+    if (!res.ok) throw new Error(res.statusText);
+  } catch (err) {
+    console.error('Retry failed:', err);
+    alert(`Retry failed: ${err.message}`);
+  }
+}
+
+// ── Log modal ────────────────────────────────────────────────────────────────
+function appendLogLine(stream, content) {
+  const line = document.createElement('div');
+  const s = stream || 'stdout';
+  line.className = `log-line ${s}`;
+  line.textContent = content;
+  logOutput.appendChild(line);
+  logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+async function openLogs(runId) {
+  activeLogRunId = runId;
+  logOutput.innerHTML = '';
+
+  const run = runs.get(runId);
+  modalTitle.textContent = run
+    ? `Logs — ${run.issue_key || ''} ${run.title || ''}`.trim()
+    : `Logs — ${runId}`;
+
+  modalOverlay.classList.add('open');
+  document.addEventListener('keydown', onModalKey);
+
+  try {
+    const res = await fetch(`/api/runs/${runId}/logs`);
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    const lines = Array.isArray(data) ? data : (data.logs || []);
+    lines.forEach(entry => appendLogLine(entry.stream, entry.content));
+  } catch (err) {
+    appendLogLine('system', `[Error loading logs: ${err.message}]`);
+  }
+}
+
+function closeLogs() {
+  modalOverlay.classList.remove('open');
+  activeLogRunId = null;
+  document.removeEventListener('keydown', onModalKey);
+}
+
+function onModalKey(e) {
+  if (e.key === 'Escape') closeLogs();
+}
+
+modalClose.addEventListener('click', closeLogs);
+modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeLogs(); });
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+fetchRuns();
+connectSSE();
+startTicker();
+</script>
+</body>
+</html>
