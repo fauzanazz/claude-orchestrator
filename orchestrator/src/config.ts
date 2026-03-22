@@ -19,11 +19,10 @@ if (missing.length > 0) {
 function parseIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
-  const parsed = parseInt(raw, 10);
-  if (Number.isNaN(parsed)) {
+  if (!/^\d+$/.test(raw)) {
     throw new Error(`Invalid numeric value for ${name}: "${raw}"`);
   }
-  return parsed;
+  return parseInt(raw, 10);
 }
 
 export const config = {
