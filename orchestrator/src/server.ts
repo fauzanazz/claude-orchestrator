@@ -103,8 +103,13 @@ let apiToken: string | null = config.apiToken;
 if (!apiToken) {
   apiToken = randomBytes(32).toString('hex');
   const tokenPath = join(import.meta.dir, '..', '.api-token');
-  writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
-  console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
+  try {
+    writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
+    console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
+  } catch (err) {
+    console.warn(`[server] Could not write API token to ${tokenPath}: ${err}`);
+    console.log(`[server] Ephemeral API token: ${apiToken}`);
+  }
   console.log(`[server] Set API_TOKEN env var to persist across restarts`);
 }
 
