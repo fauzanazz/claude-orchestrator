@@ -23,17 +23,20 @@ This design adds dependency handling using Linear's native parent/sub-issue rela
 
 #### 1a. Add variable and argument parsing
 
-After `PRIORITY="${4:-3}"` (line 10), add:
+Replace the `PRIORITY="${4:-3}"` assignment with flag-aware parsing that detects whether `$4` is a positional priority or a flag:
 
 ```bash
-PARENT_ISSUE=""
-```
+# Priority is optional (default 3). If $4 looks like a flag, skip it.
+if [[ -n "${4:-}" && "${4}" != -* ]]; then
+  PRIORITY="$4"
+  shift 4
+else
+  PRIORITY=3
+  shift 3
+fi
 
-The positional args stay the same (project-key, slug, title, priority). Add `--parent` as a named flag. Replace the simple positional assignment block with flag-aware parsing. Insert after the positional args:
-
-```bash
 # Parse optional flags after positional args
-shift 4 2>/dev/null || shift $#
+PARENT_ISSUE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --parent)
@@ -51,6 +54,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 ```
+
+This ensures `--parent` works both with and without an explicit priority:
+- `submit.sh proj slug title 2 --parent FAU-9` → priority=2, parent=FAU-9
+- `submit.sh proj slug title --parent FAU-9` → priority=3 (default), parent=FAU-9
+- `submit.sh proj slug title` → priority=3 (default), no parent
 
 #### 1b. Pass `--parent` to lineark issues create
 
