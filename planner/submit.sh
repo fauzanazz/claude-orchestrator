@@ -41,6 +41,26 @@ if [[ ! "$SLUG" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
   exit 1
 fi
 
+# Parse optional flags after positional args
+PARENT_ISSUE=""
+shift 4 2>/dev/null || shift $#
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --parent)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "Error: --parent requires an issue identifier (e.g. FAU-9)" >&2
+        exit 1
+      fi
+      PARENT_ISSUE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: unknown flag '$1'" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # --- Resolve project config ---
 PROJECT_PATH=$(jq -r --arg k "$PROJECT_KEY" '.[$k].path' "$PROJECTS")
 TEAM=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearTeam' "$PROJECTS")

@@ -35,9 +35,13 @@ To work with a project, cd into it and explore:
 
 ### Submitting a design
 When a design is ready, use the submit script:
-  cat <<'EOF' | $PLANNER_DIR/submit.sh <project-key> <slug> <title> [priority]
+  cat <<'EOF' | $PLANNER_DIR/submit.sh <project-key> <slug> <title> [priority] [--parent ISSUE-KEY]
   <design doc content from stdin>
   EOF
+
+Optional flags:
+- `--parent <issue-key>`: Set a parent issue. The orchestrator will wait for the
+  parent to be Done before processing this issue.
 
 This atomically:
 1. Creates branch agent/{slug} from latest main (in a temp worktree — safe if you have dirty state)

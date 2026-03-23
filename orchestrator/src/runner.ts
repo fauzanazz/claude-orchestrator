@@ -149,6 +149,8 @@ export async function pollLinear(): Promise<LinearIssue[]> {
   const ready = summaries.filter((s) => s.state === 'Ready for Agent' || s.state === 'In Progress');
   if (ready.length === 0) return [];
 
+  clearParentStateCache();
+
   // Step 2: Read full details for each matching issue (has id + description)
   const issues: LinearIssue[] = [];
   for (const summary of ready) {
@@ -177,6 +179,14 @@ export async function pollLinear(): Promise<LinearIssue[]> {
       }
 
       const parent = full.parent as { id: string; identifier: string } | null | undefined;
+      if (parent?.identifier) {
+        const done = await isParentDone(parent.identifier);
+        if (!done) {
+          console.log(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
+          continue;
+        }
+      }
+
       issues.push({
         id: full.id,
         identifier: full.identifier,
@@ -241,6 +251,42 @@ export function commentOnIssue(key: string, message: string): void {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+}
+
+// ---------------------------------------------------------------------------
+// Parent dependency checking
+// ---------------------------------------------------------------------------
+
+const parentStateCache = new Map<string, string>();
+
+export function clearParentStateCache(): void {
+  parentStateCache.clear();
+}
+
+async function getIssueState(identifier: string): Promise<string | null> {
+  const cached = parentStateCache.get(identifier);
+  if (cached) return cached;
+
+  try {
+    const readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
+    const parsed = JSON.parse(readOut) as Record<string, unknown>;
+    const state = (parsed.state as Record<string, unknown>)?.name as string | undefined;
+    if (state) {
+      parentStateCache.set(identifier, state);
+    }
+    return state ?? null;
+  } catch {
+    console.warn(`[runner] Failed to read state for ${identifier}`);
+    return null;
+  }
+}
+
+async function isParentDone(parentIdentifier: string): Promise<boolean> {
+  const state = await getIssueState(parentIdentifier);
+  if (!state) return false; // can't determine — safe to block
+
+  const doneStates = ['done', 'canceled', 'cancelled'];
+  return doneStates.includes(state.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------
