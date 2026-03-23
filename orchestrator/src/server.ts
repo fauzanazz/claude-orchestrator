@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
-import { listRuns, getLogsForRun, getRun, getRunByBranch, insertRun, isReviewProcessed, markReviewProcessed } from './db.ts';
+import { db, listRuns, getLogsForRun, getRun, getRunByBranch, insertRun, isReviewProcessed, markReviewProcessed } from './db.ts';
 import {
   onSSE,
   startRunner,
@@ -85,6 +85,8 @@ setInterval(() => {
 // Hono app
 // ---------------------------------------------------------------------------
 
+const startTime = Date.now();
+
 export const app = new Hono();
 
 // ---------------------------------------------------------------------------
@@ -98,6 +100,21 @@ app.use('*', async (c, next) => {
     return c.text('Not Found', 404);
   }
   return next();
+});
+
+// GET /health — liveness/readiness probe (localhost-only via tunnel guard)
+app.get('/health', (c) => {
+  let dbStatus: 'ok' | 'error' = 'ok';
+  try {
+    db.prepare('SELECT 1').get();
+  } catch {
+    dbStatus = 'error';
+  }
+  return c.json({
+    status: 'ok',
+    uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
+    db: dbStatus,
+  });
 });
 
 // GET /api/projects — list project names with descriptions
