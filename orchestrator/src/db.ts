@@ -2,7 +2,8 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import type { Run, RunStatus, LogEntry, FixTracking, Issue } from './types.ts';
 
-export const db = new Database(join(import.meta.dir, '..', 'orchestrator.db'), {
+const dbPath = process.env.ORCHESTRATOR_DB_PATH ?? join(import.meta.dir, '..', 'orchestrator.db');
+export const db = new Database(dbPath, {
   create: true,
 });
 

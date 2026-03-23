@@ -7,12 +7,17 @@ PROJECTS="$PLANNER_DIR/projects.json"
 PROJECT_KEY="$1"
 SLUG="$2"
 TITLE="$3"
-PRIORITY="${4:-3}"
 
+PRIORITY="3"
 PARENT_ISSUE=""
 
-# Parse optional flags after positional args
-shift 4 2>/dev/null || shift $#
+# Shift past required positional args; consume optional 4th (priority) if it's not a flag
+if [[ $# -ge 4 && "$4" != -* ]]; then
+  PRIORITY="$4"
+  shift 4
+else
+  shift 3
+fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --parent)
