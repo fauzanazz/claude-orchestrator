@@ -9,6 +9,12 @@ SLUG="$2"
 TITLE="$3"
 PRIORITY="${4:-3}"
 
+# --- Validate slug (alphanumeric, hyphens, underscores only; no path traversal) ---
+if [[ ! "$SLUG" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+  echo "Error: slug must be alphanumeric with hyphens/underscores, got '$SLUG'" >&2
+  exit 1
+fi
+
 # --- Resolve project config ---
 PROJECT_PATH=$(jq -r --arg k "$PROJECT_KEY" '.[$k].path' "$PROJECTS")
 TEAM=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearTeam' "$PROJECTS")

@@ -35,6 +35,7 @@ import {
   forcePushFromWorktree,
 } from './git.ts';
 import { initWorktree } from './init.ts';
+import { validateDesignPath, validateBranch, validateRepo } from './validate.ts';
 import {
   buildInitializerPrompt,
   buildCodingPrompt,
@@ -172,7 +173,11 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
   const repo = repoMatch?.[1]?.trim();
 
   if (designPath && branch && repo) {
-    return { designPath, branch, repo };
+    return {
+      designPath: validateDesignPath(designPath),
+      branch: validateBranch(branch),
+      repo: validateRepo(repo),
+    };
   }
 
   // Fallback: extract from prose-style descriptions
@@ -187,7 +192,11 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
 
   if (!pd || !pb || !pr) return null;
 
-  return { designPath: pd, branch: pb, repo: pr };
+  return {
+    designPath: validateDesignPath(pd),
+    branch: validateBranch(pb),
+    repo: validateRepo(pr),
+  };
 }
 
 export function updateLinearStatus(key: string, state: string): void {
@@ -1196,7 +1205,13 @@ export function startRunner(): void {
       const issues = await pollLinear();
 
       for (const linearIssue of issues) {
-        const meta = parseIssueMetadata(linearIssue.description ?? '');
+        let meta: ReturnType<typeof parseIssueMetadata>;
+        try {
+          meta = parseIssueMetadata(linearIssue.description ?? '');
+        } catch (err) {
+          console.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${err instanceof Error ? err.message : err}`);
+          continue;
+        }
         if (!meta) continue;
 
         const resolved = resolveProject(meta.repo);
