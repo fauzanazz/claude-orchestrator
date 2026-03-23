@@ -71,6 +71,11 @@ try { db.run('ALTER TABLE runs ADD COLUMN is_fix INTEGER NOT NULL DEFAULT 0'); }
 try { db.run('ALTER TABLE runs ADD COLUMN fix_type TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
 
+// Migrate: add retry_attempt column for auto-retry
+try { db.run('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0'); } catch (e: any) {
+  if (!String(e?.message).includes('duplicate column')) throw e;
+}
+
 // Migrate: add issue metadata columns for restart persistence
 try { db.run('ALTER TABLE runs ADD COLUMN design_path TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN issue_repo TEXT'); } catch {}
@@ -101,12 +106,12 @@ try {
 
 // Prepared statements
 const stmtInsertRun = db.prepare<void, [
-  string, string, string, string, string, string, string, string, number, number, string | null, number, number | null, string | null, string | null, string | null
+  string, string, string, string, string, string, string, string, number, number, string | null, number, number, number | null, string | null, string | null, string | null
 ]>(`
   INSERT OR IGNORE INTO runs
-    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, pr_number, design_path, issue_repo, base_branch)
+    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, retry_attempt, pr_number, design_path, issue_repo, base_branch)
   VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const stmtGetRunById = db.prepare<Run, [string]>(`
@@ -166,6 +171,7 @@ export function insertRun(
     run.is_fix,
     run.fix_type ?? null,
     run.fix_attempt,
+    run.retry_attempt,
     run.pr_number ?? null,
     run.design_path ?? null,
     run.issue_repo ?? null,
@@ -398,6 +404,7 @@ export function clearFixTracking(repo: string, prNumber: number, fixType: string
   stmtClearFixTracking.run(repo, prNumber, fixType);
 }
 
+<<<<<<< agent/pr-dependency-linking
 const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`
   SELECT pr_number FROM runs
   WHERE issue_key = ?
@@ -411,6 +418,35 @@ const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`
 export function getPRNumberByIssueKey(issueKey: string): number | null {
   const row = stmtGetPRByIssueKey.get(issueKey);
   return row?.pr_number ?? null;
+=======
+// ---------------------------------------------------------------------------
+// Rate limiting: retry tracking queries
+// ---------------------------------------------------------------------------
+
+const stmtCountRetriesForIssue = db.prepare<{ count: number }, [string]>(`
+  SELECT COUNT(*) as count FROM runs
+  WHERE issue_id = ? AND status = 'queued'
+`);
+
+const stmtLatestRetryTime = db.prepare<{ created_at: string } | null, [string, string]>(`
+  SELECT created_at FROM runs
+  WHERE issue_id = ? AND id != ?
+  ORDER BY created_at DESC LIMIT 1
+`);
+
+export function countQueuedForIssue(issueId: string): number {
+  return stmtCountRetriesForIssue.get(issueId)?.count ?? 0;
+}
+
+export function getLatestRunTimeForIssue(issueId: string, excludeRunId: string): string | null {
+  return stmtLatestRetryTime.get(issueId, excludeRunId)?.created_at ?? null;
+}
+
+export function countTotalQueued(): number {
+  return db.prepare<{ count: number }, []>(
+    `SELECT COUNT(*) as count FROM runs WHERE status = 'queued'`
+  ).get()?.count ?? 0;
+>>>>>>> main
 }
 
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {

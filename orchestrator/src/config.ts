@@ -42,6 +42,9 @@ export const config = {
   reviewMinBodyLength: parseIntEnv('REVIEW_MIN_BODY_LENGTH', 10),
   reviewWatchMaxAgeDays: parseIntEnv('REVIEW_WATCH_MAX_AGE_DAYS', 7),
   port: parseIntEnv('PORT', 7400),
+  maxQueueSize: parseIntEnv('MAX_QUEUE_SIZE', 20),
+  maxRetriesPerRun: parseIntEnv('MAX_RETRIES_PER_RUN', 3),
+  retryCooldownMs: parseIntEnv('RETRY_COOLDOWN_MS', 60000),
 
   tunnelName: process.env.TUNNEL_NAME,
   tunnelHostname: process.env.TUNNEL_HOSTNAME,
@@ -49,6 +52,8 @@ export const config = {
   notifyPollIntervalMs: parseInt(process.env.NOTIFY_POLL_INTERVAL_MS ?? '120000', 10),
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
   maxFixRetries: parseInt(process.env.MAX_FIX_RETRIES ?? '3', 10),
+  maxRunRetries: parseIntEnv('MAX_RUN_RETRIES', 3),
+  runRetryDelayMs: parseIntEnv('RUN_RETRY_DELAY_MS', 30000),
   fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
 
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),

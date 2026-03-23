@@ -12,6 +12,7 @@ export interface ProjectConfig {
   baseBranch: string;
   init?: string[];
   description?: string;
+  allowedTools?: string[];  // Claude Code tool/command patterns for settings.json allow list
 }
 
 // Projects registry (keyed by project name)
@@ -58,6 +59,7 @@ export interface Run {
   is_fix: number;                // 0 or 1
   fix_type: string | null;       // 'merge_conflict' or 'ci_failure'
   fix_attempt: number;           // which attempt (1, 2, 3...)
+  retry_attempt: number;         // auto-retry attempt (0 = first try, 1+ = retries)
   pr_number: number | null;
   agent_pid: number | null;
   iterations: number;

@@ -4,7 +4,11 @@ import { timingSafeEqual } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
-import { db, listRuns, getLogsForRun, getRun, getRunByBranch, insertRun, isReviewProcessed, markReviewProcessed } from './db.ts';
+import {
+  db, listRuns, getLogsForRun, getRun, getRunByBranch, insertRun,
+  isReviewProcessed, markReviewProcessed,
+  countQueuedForIssue, getLatestRunTimeForIssue, countTotalQueued,
+} from './db.ts';
 import {
   onSSE,
   startRunner,
@@ -117,6 +121,8 @@ app.get('/health', (c) => {
     status: 'ok',
     uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
     db: dbStatus,
+    maxRunRetries: config.maxRunRetries,
+    maxFixRetries: config.maxFixRetries,
   });
 });
 
@@ -162,6 +168,35 @@ app.post('/api/runs/:id/retry', async (c) => {
     return c.json({ error: 'Only failed runs can be retried' }, 400);
   }
 
+  // Rate limiting guards
+  const totalQueued = countTotalQueued();
+  if (totalQueued >= config.maxQueueSize) {
+    return c.json(
+      { error: `Queue full (${totalQueued}/${config.maxQueueSize}). Wait for runs to complete.` },
+      429,
+    );
+  }
+
+  const queuedForIssue = countQueuedForIssue(original.issue_id);
+  if (queuedForIssue >= config.maxRetriesPerRun) {
+    return c.json(
+      { error: `Too many queued retries for this issue (${queuedForIssue}/${config.maxRetriesPerRun})` },
+      429,
+    );
+  }
+
+  const latestTime = getLatestRunTimeForIssue(original.issue_id, original.id);
+  if (latestTime) {
+    const elapsed = Date.now() - new Date(latestTime + 'Z').getTime();
+    if (elapsed < config.retryCooldownMs) {
+      const waitSec = Math.ceil((config.retryCooldownMs - elapsed) / 1000);
+      return c.json(
+        { error: `Retry cooldown: wait ${waitSec}s before retrying this run` },
+        429,
+      );
+    }
+  }
+
   let issue;
   try {
     issue = await reconstructIssueFromRun(original);
@@ -184,6 +219,7 @@ app.post('/api/runs/:id/retry', async (c) => {
     is_fix: original.is_fix ?? 0,
     fix_type: original.fix_type ?? null,
     fix_attempt: original.fix_attempt ?? 0,
+    retry_attempt: 0,
     pr_number: original.pr_number,
     agent_pid: null,
     iterations: 0,

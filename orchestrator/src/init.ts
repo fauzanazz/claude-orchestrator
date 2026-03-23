@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { validateInitCommand, splitCommand } from './validate.ts';
 
 export async function detectInit(worktreePath: string): Promise<string[]> {
   if (await Bun.file(join(worktreePath, 'bun.lockb')).exists()) {
@@ -28,9 +29,11 @@ export async function initWorktree(
   const commands = projectInit ?? (await detectInit(worktreePath));
 
   for (const cmd of commands) {
-    appendLog(runId, 'system', `[init] ${cmd}`);
+    const validated = validateInitCommand(cmd);
+    const args = splitCommand(validated);
+    appendLog(runId, 'system', `[init] ${validated}`);
 
-    const proc = Bun.spawn(['sh', '-c', cmd], {
+    const proc = Bun.spawn(args, {
       cwd: worktreePath,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -39,7 +42,7 @@ export async function initWorktree(
     await proc.exited;
 
     if (proc.exitCode !== 0) {
-      throw new Error(`Init command failed: ${cmd}`);
+      throw new Error(`Init command failed: ${validated}`);
     }
   }
 }

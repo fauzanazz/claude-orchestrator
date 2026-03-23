@@ -433,6 +433,9 @@ function runTypeBadge(run) {
     const attempt = run.fix_attempt ? `<span class="fix-attempt">${run.fix_attempt}/${window._maxFixRetries || '?'}</span>` : '';
     return `<span class="fix-badge ${esc(run.fix_type)}">${label}</span>${attempt}`;
   }
+  if (run.retry_attempt > 0) {
+    return `<span style="color:var(--yellow)">Retry ${run.retry_attempt}/${window._maxRunRetries || 3}</span>`;
+  }
   if (run.is_revision) {
     const siblings = [...runs.values()].filter(r => r.issue_key === run.issue_key);
     siblings.sort((a, b) => (a.created_at || a.id) < (b.created_at || b.id) ? -1 : 1);
@@ -580,6 +583,17 @@ function connectSSE() {
 // ── Filters ──────────────────────────────────────────────────────────────────
 const knownProjects = new Set();
 let projectMeta = {};  // { projectName: { repo, description } }
+
+async function fetchConfig() {
+  try {
+    const res = await fetch('/health');
+    if (res.ok) {
+      const data = await res.json();
+      window._maxRunRetries = data.maxRunRetries ?? 3;
+      window._maxFixRetries = data.maxFixRetries ?? 3;
+    }
+  } catch {}
+}
 
 async function fetchProjectMeta() {
   try {
@@ -739,7 +753,7 @@ btnLoadMore.addEventListener('click', async () => {
 });
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-fetchProjectMeta().then(() => fetchRuns());
+Promise.all([fetchConfig(), fetchProjectMeta()]).then(() => fetchRuns());
 connectSSE();
 startTicker();
 </script>
