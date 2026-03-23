@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import {
   truncateForNotification,
   sanitizeForSlack,
@@ -67,6 +67,7 @@ describe('sanitizeForSlack', () => {
 describe('sendMacOSNotification', () => {
   let spawnCalls: Array<[string[], Record<string, unknown>]>;
   const originalSpawn = Bun.spawn;
+  const originalSpawnSync = Bun.spawnSync;
 
   beforeEach(() => {
     spawnCalls = [];
@@ -75,12 +76,14 @@ describe('sendMacOSNotification', () => {
       spawnCalls.push([args, opts]);
       return { exitCode: 0, stdout: null, stderr: null, exited: Promise.resolve(0) };
     };
+    // Mock spawnSync so terminal-notifier is "not found" → osascript fallback
+    // @ts-expect-error — mock override
+    Bun.spawnSync = () => ({ exitCode: 1, stdout: null, stderr: null });
   });
 
-  // Restore after all tests in this describe
-  // (bun:test runs describes synchronously, so this is fine)
-  test('cleanup', () => {
+  afterEach(() => {
     Bun.spawn = originalSpawn;
+    Bun.spawnSync = originalSpawnSync;
   });
 
   test('escapes double quotes in title and body', () => {
