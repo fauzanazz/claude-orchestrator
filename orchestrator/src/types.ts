@@ -26,6 +26,10 @@ export interface LinearIssue {
   identifier: string; // e.g. "ENG-57"
   title: string;
   description: string;
+  parent?: {
+    id: string;
+    identifier: string;
+  } | null;
   [key: string]: unknown;
 }
 
