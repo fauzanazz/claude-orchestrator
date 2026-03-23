@@ -192,7 +192,7 @@ describe('GHPRViewSchema', () => {
       statusCheckRollup: [{ name: 'ci', status: 'IN_PROGRESS', conclusion: null }],
     });
     expect(result.success).toBe(true);
-    expect(result.data!.statusCheckRollup[0].conclusion).toBeNull();
+    expect(result.data!.statusCheckRollup[0]!.conclusion).toBeNull();
   });
 
   test('rejects missing required fields', () => {
@@ -219,7 +219,7 @@ describe('GHPRReviewPollSchema', () => {
     });
     expect(result.success).toBe(true);
     expect(result.data!.reviews.length).toBe(1);
-    expect(result.data!.reviews[0].id).toBe('r-1');
+    expect(result.data!.reviews[0]!.id).toBe('r-1');
   });
 
   test('defaults reviews to empty array when missing', () => {
@@ -240,8 +240,8 @@ describe('GHPRReviewPollSchema', () => {
       reviews: [{}],
     });
     expect(result.success).toBe(true);
-    expect(result.data!.reviews[0].state).toBe('');
-    expect(result.data!.reviews[0].body).toBe('');
+    expect(result.data!.reviews[0]!.state).toBe('');
+    expect(result.data!.reviews[0]!.body).toBe('');
   });
 });
 
@@ -253,7 +253,7 @@ describe('GHRunListSchema', () => {
     ]);
     expect(result.success).toBe(true);
     expect(result.data!.length).toBe(2);
-    expect(result.data![0].databaseId).toBe(123);
+    expect(result.data![0]!.databaseId).toBe(123);
   });
 
   test('rejects missing databaseId', () => {

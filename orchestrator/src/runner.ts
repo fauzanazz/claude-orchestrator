@@ -124,7 +124,13 @@ async function runLineark(args: string[]): Promise<string> {
 export async function pollLinear(): Promise<LinearIssue[]> {
   // Step 1: List issues (lean output — has identifier + state but no id/description)
   const listOut = await runLineark(['issues', 'list', '--format', 'json']);
-  const parseResult = LinearIssueListSchema.safeParse(JSON.parse(listOut));
+  let listJson: unknown;
+  try {
+    listJson = JSON.parse(listOut);
+  } catch {
+    throw new Error(`lineark list output is not valid JSON: ${listOut.slice(0, 200)}`);
+  }
+  const parseResult = LinearIssueListSchema.safeParse(listJson);
   if (!parseResult.success) {
     throw new Error(`lineark list output validation failed: ${parseResult.error.message}`);
   }
@@ -139,7 +145,14 @@ export async function pollLinear(): Promise<LinearIssue[]> {
   for (const summary of ready) {
     const identifier = summary.identifier;
     const readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
-    const detailResult = LinearIssueDetailSchema.safeParse(JSON.parse(readOut));
+    let detailJson: unknown;
+    try {
+      detailJson = JSON.parse(readOut);
+    } catch {
+      console.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
+      continue;
+    }
+    const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
     if (!detailResult.success) {
       console.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
       continue;
@@ -254,7 +267,13 @@ export function resolveProject(
 export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
   const readOut = await runLineark(['issues', 'read', run.issue_key, '--format', 'json']);
 
-  const detailResult = LinearIssueDetailSchema.safeParse(JSON.parse(readOut));
+  let detailJson: unknown;
+  try {
+    detailJson = JSON.parse(readOut);
+  } catch {
+    throw new Error(`lineark read for ${run.issue_key} returned invalid JSON`);
+  }
+  const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
   if (!detailResult.success) {
     throw new Error(`Failed to validate Linear issue for ${run.issue_key}: ${detailResult.error.message}`);
   }
@@ -435,7 +454,13 @@ async function fetchCIFailureLogs(repo: string, branch: string): Promise<string>
 
   if (listExit !== 0) return 'Could not fetch CI run list.';
 
-  const listResult = GHRunListSchema.safeParse(JSON.parse(listOut));
+  let listJson: unknown;
+  try {
+    listJson = JSON.parse(listOut);
+  } catch {
+    return 'Could not parse CI run list (invalid JSON).';
+  }
+  const listResult = GHRunListSchema.safeParse(listJson);
   if (!listResult.success) return 'Could not parse CI run list.';
   const runs = listResult.data;
 
@@ -1058,7 +1083,13 @@ export async function pollReviews(): Promise<void> {
 
       if (ghExit !== 0) continue;
 
-      const pollResult = GHPRReviewPollSchema.safeParse(JSON.parse(ghOut));
+      let pollJson: unknown;
+      try {
+        pollJson = JSON.parse(ghOut);
+      } catch {
+        continue;
+      }
+      const pollResult = GHPRReviewPollSchema.safeParse(pollJson);
       if (!pollResult.success) continue;
       const prData = pollResult.data;
 
