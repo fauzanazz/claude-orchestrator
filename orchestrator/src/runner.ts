@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { monotonicFactory } from 'ulid';
 import { config } from './config.ts';
@@ -209,9 +209,19 @@ export function commentOnIssue(key: string, message: string): void {
 // Project resolution
 // ---------------------------------------------------------------------------
 
+let _projectsCache: ProjectsConfig | null = null;
+let _projectsMtime: number = 0;
+
 export function loadProjects(): ProjectsConfig {
+  const stat = statSync(config.projectsConfigPath);
+  const mtime = stat.mtimeMs;
+  if (_projectsCache && mtime === _projectsMtime) {
+    return _projectsCache;
+  }
   const raw = readFileSync(config.projectsConfigPath, 'utf-8');
-  return JSON.parse(raw) as ProjectsConfig;
+  _projectsCache = JSON.parse(raw) as ProjectsConfig;
+  _projectsMtime = mtime;
+  return _projectsCache;
 }
 
 export function resolveProject(
