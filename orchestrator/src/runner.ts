@@ -794,6 +794,21 @@ export async function executeRun(
     const hasCommits = await hasLocalCommits(worktreePath!);
 
     if (!hasCommits) {
+      // If a PR already exists for this issue, the work was done by a prior run.
+      // Treat as a no-op success instead of failing.
+      const existingPR = getPRNumberByIssueKey(issue.key);
+      if (existingPR) {
+        const prUrl = `https://github.com/${issue.repo}/pull/${existingPR}`;
+        bufferLog(runId, 'system', `[runner] No new commits but PR #${existingPR} already exists — nothing to do`);
+        updateRunStatus(runId, 'success', {
+          pr_url: prUrl,
+          pr_number: existingPR,
+          completed_at: new Date().toISOString(),
+        });
+        const updatedRun = getRun(runId);
+        if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
+        return;
+      }
       throw new NonRetryableError(`No commits made after ${completedSessions} session(s) — nothing to push`);
     }
 
