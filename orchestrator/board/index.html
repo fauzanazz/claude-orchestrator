@@ -280,6 +280,29 @@ td {
   white-space: nowrap;
   max-width: 50%;
 }
+
+/* Pagination */
+#pagination-bar {
+  display: none;
+  justify-content: center;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg2);
+}
+
+#btn-load-more {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 5px 16px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+#btn-load-more:hover { border-color: var(--text-muted); color: #fff; }
+#btn-load-more:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
@@ -328,6 +351,10 @@ td {
   </table>
 </div>
 
+<div id="pagination-bar">
+  <button id="btn-load-more">Load More</button>
+</div>
+
 <div id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div id="modal">
     <div id="modal-header">
@@ -348,6 +375,11 @@ let timerHandle = null;
 let sseSource = null;
 let sseReconnectTimer = null;
 
+// Pagination state
+const PAGE_LIMIT = 100;
+let pageOffset = 0;
+let hasMoreRuns = false;
+
 // ── DOM refs ─────────────────────────────────────────────────────────────────
 const tbody       = document.getElementById('runs-body');
 const emptyRow    = document.getElementById('empty-row');
@@ -360,6 +392,8 @@ const modalClose  = document.getElementById('modal-close');
 const filterStatus  = document.getElementById('filter-status');
 const filterProject = document.getElementById('filter-project');
 const projectDesc   = document.getElementById('project-desc');
+const paginationBar = document.getElementById('pagination-bar');
+const btnLoadMore   = document.getElementById('btn-load-more');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(seconds) {
@@ -606,9 +640,15 @@ filterStatus.addEventListener('change', applyFilters);
 filterProject.addEventListener('change', applyFilters);
 
 // ── REST ─────────────────────────────────────────────────────────────────────
-async function fetchRuns() {
+async function fetchRuns(append = false) {
+  if (!append) {
+    // Reset pagination when doing a fresh load (e.g. SSE reconnect)
+    pageOffset = 0;
+    hasMoreRuns = false;
+  }
+
   try {
-    const res = await fetch('/api/runs');
+    const res = await fetch(`/api/runs?limit=${PAGE_LIMIT}&offset=${pageOffset}`);
     if (!res.ok) throw new Error(res.statusText);
     const data = await res.json();
     const list = Array.isArray(data) ? data : (data.runs || []);
@@ -616,9 +656,23 @@ async function fetchRuns() {
     list.forEach(upsertRun);
     populateProjectFilter(list);
     applyFilters();
+
+    // If we got a full page, there may be more
+    hasMoreRuns = list.length === PAGE_LIMIT;
+    pageOffset += list.length;
+    updatePaginationBar();
   } catch (err) {
     console.error('Failed to fetch runs:', err);
     emptyRow.querySelector('td').textContent = 'Failed to load runs.';
+  }
+}
+
+function updatePaginationBar() {
+  if (hasMoreRuns) {
+    paginationBar.style.display = 'flex';
+    btnLoadMore.disabled = false;
+  } else {
+    paginationBar.style.display = 'none';
   }
 }
 
@@ -677,6 +731,12 @@ function onModalKey(e) {
 
 modalClose.addEventListener('click', closeLogs);
 modalOverlay.addEventListener('click', e => { if (e.target === modalOverlay) closeLogs(); });
+
+// ── Load More ────────────────────────────────────────────────────────────────
+btnLoadMore.addEventListener('click', async () => {
+  btnLoadMore.disabled = true;
+  await fetchRuns(true);
+});
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 fetchProjectMeta().then(() => fetchRuns());

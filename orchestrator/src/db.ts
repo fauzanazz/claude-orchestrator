@@ -220,34 +220,38 @@ export function getRunsByStatus(status: RunStatus): Run[] {
   return stmtGetRunsByStatus.all(status);
 }
 
-export function listRuns(filters?: { status?: RunStatus; project?: string }): Run[] {
-  if (!filters || (!filters.status && !filters.project)) {
-    return db.prepare<Run, []>('SELECT * FROM runs ORDER BY created_at DESC').all();
-  }
+export function listRuns(filters?: { status?: RunStatus; project?: string; limit?: number; offset?: number }): Run[] {
+  const limit = filters?.limit ?? 100;
+  const offset = filters?.offset ?? 0;
 
   const conditions: string[] = [];
   const values: (string | number | null)[] = [];
 
-  if (filters.status) {
+  if (filters?.status) {
     conditions.push('status = ?');
     values.push(filters.status);
   }
 
-  if (filters.project) {
+  if (filters?.project) {
     conditions.push('project = ?');
     values.push(filters.project);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  return db.prepare<Run, (string | number | null)[]>(`SELECT * FROM runs ${where} ORDER BY created_at DESC`).all(...(values as [string, ...string[]]));
+  values.push(limit, offset);
+  return db.prepare<Run, (string | number | null)[]>(`SELECT * FROM runs ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`).all(...(values as [string, ...string[]]));
 }
 
 export function insertLog(runId: string, stream: string, content: string): void {
   stmtInsertLog.run(runId, stream, content);
 }
 
-export function getLogsForRun(runId: string): LogEntry[] {
-  return stmtGetLogsForRun.all(runId);
+export function getLogsForRun(runId: string, limit?: number, offset?: number): LogEntry[] {
+  const l = limit ?? 1000;
+  const o = offset ?? 0;
+  return db.prepare<LogEntry, [string, number, number]>(
+    'SELECT * FROM logs WHERE run_id = ? ORDER BY id ASC LIMIT ? OFFSET ?'
+  ).all(runId, l, o);
 }
 
 const stmtUpdateRunIterations = db.prepare<void, [number, string]>(

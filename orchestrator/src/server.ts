@@ -110,18 +110,22 @@ app.get('/api/projects', (c) => {
   return c.json(result);
 });
 
-// GET /api/runs — list runs with optional ?status= and ?project= filters
+// GET /api/runs — list runs with optional ?status=, ?project=, ?limit=, ?offset= params
 app.get('/api/runs', (c) => {
   const status = c.req.query('status') as RunStatus | undefined;
   const project = c.req.query('project');
-  const runs = listRuns({ status, project });
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 500);
+  const offset = parseInt(c.req.query('offset') ?? '0', 10) || 0;
+  const runs = listRuns({ status, project, limit, offset });
   return c.json(runs);
 });
 
-// GET /api/runs/:id/logs — get logs for a run
+// GET /api/runs/:id/logs — get logs for a run with optional ?limit= and ?offset= params
 app.get('/api/runs/:id/logs', (c) => {
   const id = c.req.param('id');
-  const logs = getLogsForRun(id);
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '1000', 10) || 1000, 5000);
+  const offset = parseInt(c.req.query('offset') ?? '0', 10) || 0;
+  const logs = getLogsForRun(id, limit, offset);
   return c.json(logs);
 });
 
