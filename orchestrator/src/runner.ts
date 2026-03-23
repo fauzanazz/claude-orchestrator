@@ -531,7 +531,7 @@ export async function executeRun(
     worktreePath = await setupWorktree(projectPath, issue.branch, issue.key, slug);
     bufferLog(runId, 'system', `[runner] Worktree: ${worktreePath}`);
 
-    await writeAgentSettings(worktreePath);
+    await writeAgentSettings(worktreePath, project.allowedTools);
     await initWorktree(worktreePath, project.init, runId, bufferLog);
 
     await setupAgentState(worktreePath);
