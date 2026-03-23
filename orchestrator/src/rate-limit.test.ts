@@ -16,6 +16,7 @@ function makeRun(overrides: Partial<Run> = {}): Omit<Run, 'created_at' | 'starte
     is_fix: 0,
     fix_type: null,
     fix_attempt: 0,
+    retry_attempt: 0,
     pr_number: null,
     agent_pid: null,
     iterations: 0,
