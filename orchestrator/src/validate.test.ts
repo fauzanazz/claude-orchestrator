@@ -134,6 +134,14 @@ describe('validateInitCommand', () => {
     expect(() => validateInitCommand('echo $(id)')).toThrow('shell metacharacters');
   });
 
+  test('rejects null bytes', () => {
+    expect(() => validateInitCommand('npm ci\x00 --malicious')).toThrow('shell metacharacters');
+  });
+
+  test('rejects other control characters', () => {
+    expect(() => validateInitCommand('npm ci\x07')).toThrow('shell metacharacters');
+  });
+
   test('allows safe custom command without metacharacters', () => {
     expect(validateInitCommand('make setup')).toBe('make setup');
   });

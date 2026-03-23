@@ -90,8 +90,8 @@ export function validateInitCommand(cmd: string): string {
     return trimmed;
   }
 
-  // For custom commands, reject shell metacharacters
-  if (/[;&|`$(){}!#<>\\'"*?\[\]\n\r]/.test(trimmed)) {
+  // For custom commands, reject shell metacharacters and control characters (including null bytes)
+  if (/[\x00-\x1f]|[;&|`$(){}!#<>\\'"*?\[\]]/.test(trimmed)) {
     throw new Error(`Unsafe init command: contains shell metacharacters — got "${trimmed}"`);
   }
 

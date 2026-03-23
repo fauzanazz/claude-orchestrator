@@ -1143,7 +1143,13 @@ export function startRunner(): void {
       const issues = await pollLinear();
 
       for (const linearIssue of issues) {
-        const meta = parseIssueMetadata(linearIssue.description ?? '');
+        let meta: ReturnType<typeof parseIssueMetadata>;
+        try {
+          meta = parseIssueMetadata(linearIssue.description ?? '');
+        } catch (err) {
+          console.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${err instanceof Error ? err.message : err}`);
+          continue;
+        }
         if (!meta) continue;
 
         const resolved = resolveProject(meta.repo);
