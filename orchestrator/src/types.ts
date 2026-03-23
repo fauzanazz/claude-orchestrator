@@ -13,6 +13,7 @@ export interface ProjectConfig {
   init?: string[];
   description?: string;
   allowedTools?: string[];  // Claude Code tool/command patterns for settings.json allow list
+  linearProject?: string;
 }
 
 // Projects registry (keyed by project name)

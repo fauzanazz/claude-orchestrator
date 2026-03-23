@@ -9,6 +9,7 @@ PROJECT_NAME=""
 VISIBILITY="private"
 BASE_DIR="$HOME/Github"
 LINEAR_TEAM="FAU"
+LINEAR_PROJECT_NAME=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -33,16 +34,25 @@ while [[ $# -gt 0 ]]; do
       LINEAR_TEAM="$2"
       shift 2
       ;;
+    --linear-project)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "Error: --linear-project requires a value" >&2
+        exit 1
+      fi
+      LINEAR_PROJECT_NAME="$2"
+      shift 2
+      ;;
     --help|-h)
-      echo "Usage: plan --init <project-name> [--public] [--path <dir>] [--team <team>]"
+      echo "Usage: plan --init <project-name> [--public] [--path <dir>] [--team <team>] [--linear-project <name>]"
       echo ""
       echo "Creates a new project: local repo + GitHub remote + projects.json entry"
       echo ""
       echo "Options:"
-      echo "  --public       Create a public GitHub repo (default: private)"
-      echo "  --path <dir>   Base directory for the project (default: ~/Github)"
-      echo "  --team <team>  Linear team key (default: FAU)"
-      echo "  --help         Show this help"
+      echo "  --public                 Create a public GitHub repo (default: private)"
+      echo "  --path <dir>             Base directory for the project (default: ~/Github)"
+      echo "  --team <team>            Linear team key (default: FAU)"
+      echo "  --linear-project <name>  Linear project name (default: project name). Reuses if exists."
+      echo "  --help                   Show this help"
       exit 0
       ;;
     -*)
@@ -206,7 +216,26 @@ REPO_CREATED=true
 echo "Pushing to remote..."
 git -C "$PROJECT_PATH" push -u origin main
 
-# --- Step 6: Register in projects.json ---
+# --- Step 6: Create or reuse Linear Project ---
+if [ -z "$LINEAR_PROJECT_NAME" ]; then
+  LINEAR_PROJECT_NAME="$PROJECT_NAME"
+fi
+
+echo "Checking for Linear Project '$LINEAR_PROJECT_NAME'..."
+
+EXISTING_PROJECT=$(lineark projects list --format json | jq -r --arg name "$LINEAR_PROJECT_NAME" '.[] | select(.name == $name) | .name' 2>/dev/null || true)
+
+if [ -n "$EXISTING_PROJECT" ]; then
+  echo "  Reusing existing Linear Project: $EXISTING_PROJECT"
+else
+  echo "  Creating Linear Project: $LINEAR_PROJECT_NAME"
+  lineark projects create "$LINEAR_PROJECT_NAME" --team "$LINEAR_TEAM" --format json > /dev/null || {
+    echo "Warning: failed to create Linear Project '$LINEAR_PROJECT_NAME'. Continuing without it." >&2
+    LINEAR_PROJECT_NAME=""
+  }
+fi
+
+# --- Step 7: Register in projects.json ---
 echo "Registering in projects.json..."
 ORIGINAL_JSON=$(cat "$PROJECTS_JSON")
 
@@ -215,7 +244,8 @@ UPDATED_JSON=$(jq \
   --arg path "$PROJECT_PATH" \
   --arg repo "$REPO_FULLNAME" \
   --arg team "$LINEAR_TEAM" \
-  '. + {($key): {path: $path, repo: $repo, baseBranch: "main", linearTeam: $team, linearProfile: ""}}' \
+  --arg linproj "$LINEAR_PROJECT_NAME" \
+  '. + {($key): {path: $path, repo: $repo, baseBranch: "main", linearTeam: $team, linearProfile: "", linearProject: $linproj}}' \
   "$PROJECTS_JSON")
 
 echo "$UPDATED_JSON" | jq --sort-keys '.' > "$PROJECTS_JSON"
@@ -227,6 +257,7 @@ echo "Project created successfully!"
 echo "  Local path:  $PROJECT_PATH"
 echo "  GitHub repo: https://github.com/$REPO_FULLNAME"
 echo "  Project key: $PROJECT_NAME"
+echo "  Linear project: ${LINEAR_PROJECT_NAME:-none}"
 echo "  Visibility:  $VISIBILITY"
 echo ""
 echo "Next steps:"
