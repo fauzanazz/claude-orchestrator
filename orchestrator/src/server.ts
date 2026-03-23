@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
@@ -94,6 +95,35 @@ setInterval(() => {
 
 const startTime = Date.now();
 
+// ---------------------------------------------------------------------------
+// API token — read from env or generate an ephemeral one on startup
+// ---------------------------------------------------------------------------
+
+let apiToken: string | null = config.apiToken;
+if (!apiToken) {
+  apiToken = randomBytes(32).toString('hex');
+  const tokenPath = join(import.meta.dir, '..', '.api-token');
+  try {
+    writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
+    console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
+  } catch (err) {
+    console.warn(`[server] Could not write API token to ${tokenPath}: ${err}`);
+    console.log(`[server] Ephemeral API token: ${apiToken}`);
+  }
+  console.log(`[server] Set API_TOKEN env var to persist across restarts`);
+}
+
+// ---------------------------------------------------------------------------
+// Path sanitization helper — strip absolute paths from error messages
+// ---------------------------------------------------------------------------
+
+function sanitizeErrorMessage(msg: string): string {
+  return msg.replace(/\/[^\s:'"]+/g, (match) => {
+    const parts = match.split('/');
+    return parts.length > 2 ? `<path>/${parts[parts.length - 1]}` : match;
+  });
+}
+
 export const app = new Hono();
 
 // ---------------------------------------------------------------------------
@@ -106,6 +136,43 @@ app.use('*', async (c, next) => {
   if (c.req.header('cf-connecting-ip') && !c.req.path.startsWith('/webhook/')) {
     return c.text('Not Found', 404);
   }
+  return next();
+});
+
+// ---------------------------------------------------------------------------
+// Bearer token authentication — all endpoints except /webhook/* and /health
+// ---------------------------------------------------------------------------
+
+app.use('*', async (c, next) => {
+  const path = c.req.path;
+  if (path.startsWith('/webhook/') || path === '/health' || path === '/') {
+    return next();
+  }
+
+  const authHeader = c.req.header('authorization');
+  if (!authHeader) {
+    return c.json({ error: 'Missing Authorization header' }, 401);
+  }
+
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return c.json({ error: 'Invalid Authorization header format' }, 401);
+  }
+
+  const token = match[1];
+  const encoder = new TextEncoder();
+  const tokenBuf = encoder.encode(token);
+  const expectedBuf = encoder.encode(apiToken!);
+
+  if (tokenBuf.byteLength !== expectedBuf.byteLength) {
+    timingSafeEqual(expectedBuf, expectedBuf);
+    return c.json({ error: 'Invalid token' }, 403);
+  }
+
+  if (!timingSafeEqual(tokenBuf, expectedBuf)) {
+    return c.json({ error: 'Invalid token' }, 403);
+  }
+
   return next();
 });
 
@@ -202,7 +269,7 @@ app.post('/api/runs/:id/retry', async (c) => {
     issue = await reconstructIssueFromRun(original);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return c.json({ error: msg }, 500);
+    return c.json({ error: sanitizeErrorMessage(msg) }, 500);
   }
 
   const newId = ulid();
@@ -241,8 +308,15 @@ app.post('/api/runs/:id/retry', async (c) => {
   return c.json({ id: newId });
 });
 
-// GET /api/events — SSE endpoint
+// GET /api/events — SSE endpoint (capped to config.maxSSEClients)
 app.get('/api/events', (_c) => {
+  if (sseClients.size >= config.maxSSEClients) {
+    return new Response(JSON.stringify({ error: 'Too many SSE connections' }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   let ctrl: ReadableStreamDefaultController;
 
   const stream = new ReadableStream({
@@ -340,7 +414,7 @@ app.post('/webhook/github', async (c) => {
     issue = await reconstructIssueFromRun(run);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return c.json({ error: `Failed to reconstruct issue: ${msg}` }, 500);
+    return c.json({ error: `Failed to reconstruct issue: ${sanitizeErrorMessage(msg)}` }, 500);
   }
 
   const revisionRunId = enqueueRevision(run, prNumber, issue);
@@ -376,6 +450,7 @@ export function startServer(): void {
 
   // Start Hono HTTP server
   const server = Bun.serve({
+    hostname: '127.0.0.1',
     port: config.port,
     fetch: app.fetch,
   });
