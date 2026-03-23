@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
@@ -37,7 +38,16 @@ async function verifyGitHubSignature(
     Array.from(new Uint8Array(sig))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
-  return signature === expected;
+  const encoder = new TextEncoder();
+  const sigBuf = encoder.encode(signature);
+  const expectedBuf = encoder.encode(expected);
+  if (sigBuf.byteLength !== expectedBuf.byteLength) {
+    // Lengths differ — still perform a constant-time comparison against
+    // expected to avoid leaking length information via timing.
+    timingSafeEqual(expectedBuf, expectedBuf);
+    return false;
+  }
+  return timingSafeEqual(sigBuf, expectedBuf);
 }
 
 // ---------------------------------------------------------------------------
