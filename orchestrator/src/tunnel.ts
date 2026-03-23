@@ -62,12 +62,3 @@ export function stopTunnel(): void {
   }
 }
 
-process.on('SIGINT', () => {
-  stopTunnel();
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  stopTunnel();
-  process.exit(0);
-});

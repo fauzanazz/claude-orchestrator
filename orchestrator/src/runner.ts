@@ -764,6 +764,27 @@ export async function executeRun(
 
 const queue: Run[] = [];
 let running = 0;
+let shuttingDown = false;
+
+export function isShuttingDown(): boolean {
+  return shuttingDown;
+}
+
+export function beginShutdown(): void {
+  shuttingDown = true;
+  queue.length = 0; // Clear pending queue
+  console.log('[runner] Shutdown initiated — no new runs will start');
+}
+
+export function getRunningCount(): number {
+  return running;
+}
+
+export function flushAllLogs(): void {
+  for (const runId of logBuffers.keys()) {
+    flushLogs(runId);
+  }
+}
 
 // Sidecar map: runId -> Issue (kept in memory for the lifetime of the queue item)
 const issueMap: Map<string, Issue> = new Map();
@@ -857,6 +878,7 @@ export function enqueueFix(
 }
 
 export async function tick(): Promise<void> {
+  if (shuttingDown) return;
   if (running >= config.maxConcurrentAgents) return;
   if (queue.length === 0) return;
 

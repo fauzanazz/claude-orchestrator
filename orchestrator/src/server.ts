@@ -12,8 +12,11 @@ import {
   enqueueWithIssue,
   reconstructIssueFromRun,
   loadProjects,
+  beginShutdown,
+  getRunningCount,
+  flushAllLogs,
 } from './runner.ts';
-import { startTunnel } from './tunnel.ts';
+import { startTunnel, stopTunnel } from './tunnel.ts';
 
 // ---------------------------------------------------------------------------
 // GitHub webhook signature verification
@@ -186,6 +189,9 @@ app.post('/api/runs/:id/retry', async (c) => {
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    design_path: original.design_path ?? null,
+    issue_repo: original.issue_repo ?? null,
+    base_branch: original.base_branch ?? null,
   };
 
   insertRun(newRun);
@@ -333,10 +339,46 @@ export function startServer(): void {
   startTunnel(config.port);
 
   // Start Hono HTTP server
-  Bun.serve({
+  const server = Bun.serve({
     port: config.port,
     fetch: app.fetch,
   });
 
   console.log(`[server] Listening on http://localhost:${config.port}`);
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log('[server] Shutting down gracefully...');
+    beginShutdown();
+
+    // Wait for running agents (max 60 seconds)
+    const maxWait = 60_000;
+    const start = Date.now();
+    while (getRunningCount() > 0 && Date.now() - start < maxWait) {
+      console.log(`[server] Waiting for ${getRunningCount()} running agent(s)...`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    if (getRunningCount() > 0) {
+      console.log(`[server] ${getRunningCount()} agent(s) still running after timeout — forcing exit`);
+    }
+
+    // Flush remaining logs
+    flushAllLogs();
+
+    // Stop tunnel
+    stopTunnel();
+
+    // Stop HTTP server
+    server.stop();
+
+    // Close database
+    db.close();
+
+    console.log('[server] Shutdown complete');
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
