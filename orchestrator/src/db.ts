@@ -432,13 +432,21 @@ export function deleteOldLogs(retentionDays: number): number {
 }
 
 export function deleteOldRuns(retentionDays: number): number {
-  db.prepare(`
-    DELETE FROM logs WHERE run_id IN (
+  const oldRunsFilter = `
+    run_id IN (
       SELECT id FROM runs
       WHERE status IN ('success', 'failed')
         AND completed_at < datetime('now', '-' || ? || ' days')
     )
-  `).run(retentionDays);
+  `;
+
+  db.prepare(`DELETE FROM logs WHERE ${oldRunsFilter}`).run(retentionDays);
+  db.prepare(`DELETE FROM processed_reviews WHERE ${oldRunsFilter}`).run(retentionDays);
+  db.prepare(`DELETE FROM fix_tracking WHERE last_run_id IN (
+    SELECT id FROM runs
+    WHERE status IN ('success', 'failed')
+      AND completed_at < datetime('now', '-' || ? || ' days')
+  )`).run(retentionDays);
 
   const result = db.prepare(`
     DELETE FROM runs

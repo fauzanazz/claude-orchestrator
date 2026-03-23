@@ -118,7 +118,7 @@ function createTestRun(overrides: {
   `).run(
     id,
     status,
-    overrides.created_at ?? "datetime('now')",
+    overrides.created_at ?? new Date().toISOString().replace('T', ' ').slice(0, 19),
     overrides.completed_at ?? null,
   );
 }
