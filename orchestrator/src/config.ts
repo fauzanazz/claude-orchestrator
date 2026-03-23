@@ -61,4 +61,7 @@ export const config = {
   cleanupIntervalMs: parseIntEnv('CLEANUP_INTERVAL_MS', 86400000), // 24 hours
 
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),
+
+  // Memory agent (Gemini Flash 2 post-run documentation)
+  geminiApiKey: process.env.GEMINI_API_KEY,
 };

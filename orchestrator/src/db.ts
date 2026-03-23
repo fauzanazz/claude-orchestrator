@@ -513,6 +513,17 @@ export function countTotalQueued(): number {
   ).get()?.count ?? 0;
 }
 
+export function hasActiveRunForIssue(issueId: string, excludeRunId?: string): boolean {
+  if (excludeRunId) {
+    return db.prepare<{ id: string }, [string, string]>(
+      `SELECT id FROM runs WHERE issue_id = ? AND status IN ('queued', 'running') AND id != ? LIMIT 1`
+    ).get(issueId, excludeRunId) !== null;
+  }
+  return db.prepare<{ id: string }, [string]>(
+    `SELECT id FROM runs WHERE issue_id = ? AND status IN ('queued', 'running') LIMIT 1`
+  ).get(issueId) !== null;
+}
+
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {
   // Find the original (non-fix, non-revision) run that created this PR
   if (projectKey) {

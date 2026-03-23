@@ -17,4 +17,4 @@ PROMPT=$(sed \
 SKILL=$(cat "$PLANNER_DIR/skills/design.md")
 PROMPT="${PROMPT//<DESIGN_SKILL>/$SKILL}"
 
-exec claude --system-prompt "$PROMPT" "$@"
+exec claude --dangerously-skip-permissions --system-prompt "$PROMPT" "$@"

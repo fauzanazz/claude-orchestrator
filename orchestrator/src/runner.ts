@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { monotonicFactory } from 'ulid';
 import { config } from './config.ts';
+import { documentRun } from './memory.ts';
 import {
   insertRun,
   insertLog,
@@ -27,6 +28,7 @@ import {
   deleteOldNotifiedPRs,
   vacuumDatabase,
   getDatabaseSize,
+  hasActiveRunForIssue,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -552,6 +554,16 @@ export async function executeRun(
   let projectPath: string | null = null;
 
   try {
+    // Guard: skip if another run for the same issue is already queued/running
+    if (hasActiveRunForIssue(issue.id, runId)) {
+      bufferLog(runId, 'system', `[runner] Skipping run ${runId} — another run for ${issue.key} is already active`);
+      updateRunStatus(runId, 'failed', {
+        error_summary: 'Skipped: duplicate run for same issue',
+        completed_at: new Date().toISOString(),
+      });
+      return;
+    }
+
     if (!run.is_fix) {
       updateLinearStatus(issue.key, 'In Progress');
     }
@@ -783,6 +795,13 @@ export async function executeRun(
     const updatedRun = getRun(runId);
     if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
 
+    // Document the run to obsidian-memory (fire-and-forget, before worktree cleanup)
+    if (worktreePath && updatedRun) {
+      await documentRun(updatedRun, issue, worktreePath).catch((e) =>
+        console.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+      );
+    }
+
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     bufferLog(runId, 'system', `[runner] Run ${runId} failed: ${errorMessage}`);
@@ -814,6 +833,13 @@ export async function executeRun(
       }
     } else {
       commentOnIssue(issue.key, `Fix attempt failed (${run.fix_type}, attempt ${run.fix_attempt}): ${errorMessage.slice(0, 200)}`);
+    }
+
+    // Document failed run to obsidian-memory (before worktree cleanup)
+    if (worktreePath && failedRun) {
+      await documentRun(failedRun, issue, worktreePath).catch((e) =>
+        console.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+      );
     }
 
   } finally {
@@ -1099,7 +1125,19 @@ export async function pollReviews(): Promise<void> {
       if (!pollResult.success) continue;
       const prData = pollResult.data;
 
-      // Stop watching closed/merged PRs
+      // Update Linear status and run state for closed/merged PRs
+      if (prData.state === 'MERGED') {
+        updateRunStatus(run.id, 'merged');
+        updateLinearStatus(run.issue_key, 'Done');
+        console.log(`[reviewer] PR #${run.pr_number} merged — marked ${run.issue_key} as Done`);
+        continue;
+      }
+      if (prData.state === 'CLOSED') {
+        updateRunStatus(run.id, 'closed');
+        updateLinearStatus(run.issue_key, 'Canceled');
+        console.log(`[reviewer] PR #${run.pr_number} closed — marked ${run.issue_key} as Canceled`);
+        continue;
+      }
       if (prData.state !== 'OPEN') continue;
 
       for (const review of prData.reviews) {
@@ -1323,8 +1361,10 @@ export function startRunner(): void {
           base_branch: issue.baseBranch,
         };
 
-        // insertRun uses INSERT OR IGNORE on (issue_id, status) for 'queued'/'running',
-        // so duplicate polls are safely ignored.
+        // Skip if there's already an active (queued/running) run for this issue
+        if (hasActiveRunForIssue(issue.id)) continue;
+
+        // insertRun uses INSERT OR IGNORE as a secondary safeguard
         insertRun(run);
 
         const fullRun = getRun(runId);

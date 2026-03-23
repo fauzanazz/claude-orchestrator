@@ -122,6 +122,8 @@ td {
 .dot.success  { background: var(--green); }
 .dot.failed   { background: var(--red); }
 .dot.review   { background: var(--yellow); }
+.dot.merged   { background: #9c27b0; }
+.dot.closed   { background: var(--gray); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }
@@ -133,6 +135,8 @@ td {
 .status-label.success { color: var(--green); }
 .status-label.failed  { color: var(--red); }
 .status-label.review  { color: var(--yellow); }
+.status-label.merged  { color: #9c27b0; }
+.status-label.closed  { color: var(--gray); }
 
 /* Buttons */
 .btn {
@@ -323,6 +327,8 @@ td {
     <option value="running">Running</option>
     <option value="success">Success</option>
     <option value="failed">Failed</option>
+    <option value="merged">Merged</option>
+    <option value="closed">Closed</option>
   </select>
   <label for="filter-project">Project</label>
   <select id="filter-project">
@@ -410,19 +416,19 @@ function elapsed(startedAt) {
 
 function totalDuration(run) {
   if (!run.started_at) return null;
-  const end = run.finished_at ? new Date(run.finished_at) : Date.now();
+  const end = run.completed_at ? new Date(run.completed_at) : Date.now();
   return (end - new Date(run.started_at).getTime()) / 1000;
 }
 
 function statusClass(status) {
   const map = { queued: 'queued', running: 'running', success: 'success',
-                failed: 'failed', review: 'review' };
+                failed: 'failed', review: 'review', merged: 'merged', closed: 'closed' };
   return map[status] || 'queued';
 }
 
 function statusLabel(status) {
   const map = { queued: 'Queued', running: 'Running', success: 'Success',
-                failed: 'Failed', review: 'Review' };
+                failed: 'Failed', review: 'Review', merged: 'Merged', closed: 'Closed' };
   return map[status] || status;
 }
 

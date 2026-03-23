@@ -57,7 +57,7 @@
   },
   "claude-orchestrator": {
     "path": "/Users/enjat/Github/claude-orchestrator",
-    "repo": "",
+    "repo": "fauzanazz/claude-orchestrator",
     "baseBranch": "main",
     "linearTeam": "FAU",
     "linearProfile": ""
@@ -160,69 +160,6 @@
     "linearTeam": "FAU",
     "linearProfile": ""
   },
-  "legali-admin-tanstack": {
-    "path": "/Users/enjat/Github/legali-admin-tanstack",
-    "repo": "Legali-AI/legali-admin-tanstack",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-be-platform": {
-    "path": "/Users/enjat/Github/my-legali/legali-be-platform",
-    "repo": "Legali-AI/legali-be-platform",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-gdocs-extension": {
-    "path": "/Users/enjat/Github/team-legali-app/legali-gdocs-extension",
-    "repo": "Legali-AI/legali-gdocs-extension",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-lea-mobile-be-platform": {
-    "path": "/Users/enjat/Github/legali-lea-mobile/legali-be-platform",
-    "repo": "Legali-AI/legali-be-platform",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-lea-mobile-fe": {
-    "path": "/Users/enjat/Github/legali-lea-mobile/legali-lea-mobile-fe",
-    "repo": "Legali-AI/legali-lea-mobile-fe",
-    "baseBranch": "staging",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-lea-web": {
-    "path": "/Users/enjat/Github/legali-lea-web",
-    "repo": "Legali-AI/legali-lea-web",
-    "baseBranch": "release/staging",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-rag": {
-    "path": "/Users/enjat/Github/my-legali/legali-rag",
-    "repo": "Legali-AI/legali-rag",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-users-fe": {
-    "path": "/Users/enjat/Github/my-legali/legali-users-fe",
-    "repo": "Legali-AI/legali-users-fe",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "legali-word-addin": {
-    "path": "/Users/enjat/Github/legali-word-addin",
-    "repo": "Legali-AI/legali-word-addin",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
   "lightrag-indonesia": {
     "path": "/Users/enjat/Github/research-agentic/LightRAG",
     "repo": "fauzanazz/LightRAG-Indonesia",
@@ -289,62 +226,6 @@
   "tab-bankruptcy": {
     "path": "/Users/enjat/Github/lomba/tab-bankruptcy",
     "repo": "Keloia/tabmind",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-ai": {
-    "path": "/Users/enjat/Github/team-legali/team-legali-ai",
-    "repo": "Legali-AI/team-legali-ai",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-be-platform": {
-    "path": "/Users/enjat/Github/team-legali/team-legali-be-platform",
-    "repo": "Legali-AI/team-legali-be-platform",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-email-intelligence": {
-    "path": "/Users/enjat/Github/team-legali-app/team-legali-email-intelligence",
-    "repo": "Legali-AI/team-legali-email-intelligence",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-ext-be-platform": {
-    "path": "/Users/enjat/Github/team-legali-extension/team-legali-be-platform",
-    "repo": "Legali-AI/team-legali-be-platform",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-ext-gdocs-extension": {
-    "path": "/Users/enjat/Github/team-legali-extension/legali-gdocs-extension",
-    "repo": "Legali-AI/legali-gdocs-extension",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-extension": {
-    "path": "/Users/enjat/Github/team-legali-extension",
-    "repo": "",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-infra-terraform": {
-    "path": "/Users/enjat/Github/team-legali/team-legali-infra-terraform",
-    "repo": "Legali-AI/team-legali-infra-terraform",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "team-legali-users-fe": {
-    "path": "/Users/enjat/Github/team-legali-users-fe",
-    "repo": "Legali-AI/team-legali-users-fe",
     "baseBranch": "main",
     "linearTeam": "FAU",
     "linearProfile": ""

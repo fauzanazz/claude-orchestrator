@@ -1,5 +1,5 @@
 // Run status
-export type RunStatus = 'queued' | 'running' | 'success' | 'failed';
+export type RunStatus = 'queued' | 'running' | 'success' | 'failed' | 'merged' | 'closed';
 
 export type FixType = 'merge_conflict' | 'ci_failure';
 
