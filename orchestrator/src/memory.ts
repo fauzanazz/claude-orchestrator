@@ -147,7 +147,7 @@ Return ONLY valid JSON, no markdown fences.`;
   const text = response.text;
   if (!text) throw new Error('Gemini returned empty response');
 
-  const parsed = JSON.parse(text) as GeminiSessionSummary;
+  const parsed = parseGeminiJson(text) as GeminiSessionSummary;
 
   // Basic validation
   if (typeof parsed.summary !== 'string' || !Array.isArray(parsed.decisions)) {
@@ -228,6 +228,22 @@ function readExistingDocs(docsDir: string): Record<string, string> {
   return docs;
 }
 
+function parseGeminiJson(raw: string): unknown {
+  // Strip markdown code fences Gemini sometimes wraps despite responseMimeType
+  let text = raw.trim();
+  const fenceMatch = text.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/);
+  if (fenceMatch?.[1]) text = fenceMatch[1].trim();
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Log truncated response for debugging
+    const preview = text.length > 500 ? text.slice(0, 250) + '\n...\n' + text.slice(-250) : text;
+    console.error(`[memory] Gemini returned invalid JSON (${text.length} chars). Preview:\n${preview}`);
+    throw e;
+  }
+}
+
 async function callGeminiForDocs(
   run: Run,
   issue: Issue,
@@ -282,13 +298,19 @@ Return ONLY valid JSON, no markdown fences.`;
     contents: prompt,
     config: {
       responseMimeType: 'application/json',
+      maxOutputTokens: 65536,
     },
   });
+
+  const finishReason = response.candidates?.[0]?.finishReason;
+  if (finishReason === 'MAX_TOKENS') {
+    throw new Error('Gemini docs response truncated (hit output token limit)');
+  }
 
   const text = response.text;
   if (!text) throw new Error('Gemini docs response empty');
 
-  return JSON.parse(text) as Record<string, string>;
+  return parseGeminiJson(text) as Record<string, string>;
 }
 
 async function updateProjectDocs(

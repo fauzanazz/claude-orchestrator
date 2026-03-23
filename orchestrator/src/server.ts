@@ -140,12 +140,21 @@ app.use('*', async (c, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Bearer token authentication — all endpoints except /webhook/* and /health
+// Bearer token authentication — all endpoints except /webhook/*, /health,
+// and localhost-only requests (no cf-connecting-ip = not from tunnel).
+// The tunnel guard above already blocks non-webhook external access,
+// so localhost requests (e.g. dashboard) can skip auth.
 // ---------------------------------------------------------------------------
 
 app.use('*', async (c, next) => {
   const path = c.req.path;
   if (path.startsWith('/webhook/') || path === '/health' || path === '/') {
+    return next();
+  }
+
+  // Localhost requests (not proxied through tunnel) skip auth —
+  // the tunnel guard already ensures only /webhook/* is externally reachable.
+  if (!c.req.header('cf-connecting-ip')) {
     return next();
   }
 
