@@ -21,6 +21,12 @@ import {
   getRunByPRNumber,
   getIssueForRun,
   getPRNumberByIssueKey,
+  deleteOldLogs,
+  deleteOldRuns,
+  deleteOldProcessedReviews,
+  deleteOldNotifiedPRs,
+  vacuumDatabase,
+  getDatabaseSize,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -1359,6 +1365,10 @@ export function startRunner(): void {
     tick().catch((err) => console.error('[runner] tick error:', err));
   }, 5_000);
 
+  // Database cleanup: periodic retention enforcement
+  setInterval(runCleanup, config.cleanupIntervalMs);
+  setTimeout(runCleanup, 30_000);
+
   console.log(
     `[runner] Running. Poll interval: ${config.pollIntervalMs}ms, ` +
     `review poll: ${config.reviewPollIntervalMs}ms, ` +
@@ -1367,4 +1377,30 @@ export function startRunner(): void {
     `max fix retries: ${config.maxFixRetries}, ` +
     `timeout: ${config.agentTimeoutMs}ms`,
   );
+}
+
+function runCleanup(): void {
+  try {
+    const sizeBefore = getDatabaseSize();
+
+    const logsDeleted = deleteOldLogs(config.logRetentionDays);
+    const runsDeleted = deleteOldRuns(config.runRetentionDays);
+    const reviewsDeleted = deleteOldProcessedReviews(config.runRetentionDays);
+    const notificationsDeleted = deleteOldNotifiedPRs(config.runRetentionDays);
+
+    if (logsDeleted + runsDeleted > 0) {
+      vacuumDatabase();
+    }
+
+    const sizeAfter = getDatabaseSize();
+    const savedKB = Math.round((sizeBefore - sizeAfter) / 1024);
+
+    console.log(
+      `[cleanup] Deleted ${logsDeleted} logs, ${runsDeleted} runs, ` +
+      `${reviewsDeleted} reviews, ${notificationsDeleted} notifications. ` +
+      `DB size: ${Math.round(sizeAfter / 1024)}KB (freed ${savedKB}KB)`
+    );
+  } catch (err) {
+    console.error('[cleanup] Error during cleanup:', err);
+  }
 }
