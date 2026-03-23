@@ -71,7 +71,9 @@ try { db.run('ALTER TABLE runs ADD COLUMN fix_type TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 // Migrate: add retry_attempt column for auto-retry
-try { db.run('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0'); } catch (e: any) {
+  if (!String(e?.message).includes('duplicate column')) throw e;
+}
 
 // Migrate: add issue metadata columns for restart persistence
 try { db.run('ALTER TABLE runs ADD COLUMN design_path TEXT'); } catch {}

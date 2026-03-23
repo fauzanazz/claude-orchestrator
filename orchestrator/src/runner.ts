@@ -749,7 +749,7 @@ export async function executeRun(
       if (nextAttempt <= config.maxRunRetries) {
         const retryLabel = `${nextAttempt}/${config.maxRunRetries}`;
         bufferLog(runId, 'system', `[runner] Scheduling retry ${retryLabel} in ${config.runRetryDelayMs / 1000}s...`);
-        commentOnIssue(issue.key, `Run failed (attempt ${run.retry_attempt ?? 0}/${config.maxRunRetries}). Retrying in ${config.runRetryDelayMs / 1000}s...\nError: ${errorMessage.slice(0, 150)}`);
+        commentOnIssue(issue.key, `Run failed (attempt ${nextAttempt}/${config.maxRunRetries}). Retrying in ${config.runRetryDelayMs / 1000}s...\nError: ${errorMessage.slice(0, 150)}`);
 
         setTimeout(() => {
           const retryRunId = enqueueRetry(run, issue);
