@@ -12,6 +12,7 @@ export interface ProjectConfig {
   baseBranch: string;
   init?: string[];
   description?: string;
+  allowedTools?: string[];  // Claude Code tool/command patterns for settings.json allow list
 }
 
 // Projects registry (keyed by project name)

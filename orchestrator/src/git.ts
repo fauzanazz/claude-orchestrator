@@ -298,22 +298,95 @@ export async function hasLocalCommits(worktreePath: string): Promise<boolean> {
 // Agent settings
 // ---------------------------------------------------------------------------
 
-const AGENT_SETTINGS = {
-  permissions: {
-    allow: ['*'],
-  },
-} as const;
+export const DEFAULT_ALLOWED_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'LS',
+
+  'Write',
+  'Edit',
+
+  'Bash(git *)',
+  'Bash(bun *)',
+  'Bash(bunx *)',
+  'Bash(npm *)',
+  'Bash(npx *)',
+  'Bash(pnpm *)',
+  'Bash(yarn *)',
+  'Bash(tsc *)',
+  'Bash(eslint *)',
+  'Bash(prettier *)',
+  'Bash(pytest *)',
+  'Bash(python *)',
+  'Bash(uv *)',
+  'Bash(cargo *)',
+  'Bash(go *)',
+  'Bash(make *)',
+  'Bash(cat *)',
+  'Bash(head *)',
+  'Bash(tail *)',
+  'Bash(wc *)',
+  'Bash(find *)',
+  'Bash(ls *)',
+  'Bash(mkdir *)',
+  'Bash(cp *)',
+  'Bash(mv *)',
+  'Bash(rm *)',
+  'Bash(touch *)',
+  'Bash(echo *)',
+  'Bash(grep *)',
+  'Bash(rg *)',
+  'Bash(sed *)',
+  'Bash(awk *)',
+  'Bash(sort *)',
+  'Bash(uniq *)',
+  'Bash(diff *)',
+  'Bash(tree *)',
+];
+
+const DENIED_TOOLS = [
+  'Bash(curl *)',
+  'Bash(wget *)',
+  'Bash(ssh *)',
+  'Bash(scp *)',
+  'Bash(nc *)',
+  'Bash(ncat *)',
+  'Bash(netcat *)',
+  'Bash(eval *)',
+  'Bash(exec *)',
+  'Bash(sudo *)',
+  'Bash(su *)',
+  'Bash(chmod 777 *)',
+  'Bash(open *)',
+  'Bash(osascript *)',
+];
+
+export function buildAgentSettings(allowedTools?: string[]): object {
+  const allow = allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+  return {
+    permissions: {
+      allow,
+      deny: DENIED_TOOLS,
+    },
+  };
+}
 
 /**
  * Writes `.claude/settings.json` inside the worktree with scoped permissions.
  */
-export async function writeAgentSettings(worktreePath: string): Promise<void> {
+export async function writeAgentSettings(
+  worktreePath: string,
+  allowedTools?: string[],
+): Promise<void> {
   const settingsDir = join(worktreePath, '.claude');
   await mkdir(settingsDir, { recursive: true });
 
+  const settings = buildAgentSettings(allowedTools);
+
   await Bun.write(
     join(settingsDir, 'settings.json'),
-    JSON.stringify(AGENT_SETTINGS, null, 2) + '\n',
+    JSON.stringify(settings, null, 2) + '\n',
   );
 }
 
