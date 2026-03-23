@@ -1,5 +1,32 @@
+# Dependencies
 node_modules/
+
+# Environment
 .env
+.env.local
+
+# SQLite database files
 *.db
+*.db-shm
+*.db-wal
 *.db-journal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+
+# Test artifacts
+.test-tmp-*
+
+# Worktrees
 .worktrees/
