@@ -30,3 +30,6 @@ build/
 
 # Worktrees
 .worktrees/
+
+# Agent orchestrator state (auto-generated)
+.agent-state/

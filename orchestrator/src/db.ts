@@ -396,6 +396,35 @@ export function clearFixTracking(repo: string, prNumber: number, fixType: string
   stmtClearFixTracking.run(repo, prNumber, fixType);
 }
 
+// ---------------------------------------------------------------------------
+// Rate limiting: retry tracking queries
+// ---------------------------------------------------------------------------
+
+const stmtCountRetriesForIssue = db.prepare<{ count: number }, [string]>(`
+  SELECT COUNT(*) as count FROM runs
+  WHERE issue_id = ? AND status = 'queued'
+`);
+
+const stmtLatestRetryTime = db.prepare<{ created_at: string } | null, [string, string]>(`
+  SELECT created_at FROM runs
+  WHERE issue_id = ? AND id != ?
+  ORDER BY created_at DESC LIMIT 1
+`);
+
+export function countQueuedForIssue(issueId: string): number {
+  return stmtCountRetriesForIssue.get(issueId)?.count ?? 0;
+}
+
+export function getLatestRunTimeForIssue(issueId: string, excludeRunId: string): string | null {
+  return stmtLatestRetryTime.get(issueId, excludeRunId)?.created_at ?? null;
+}
+
+export function countTotalQueued(): number {
+  return db.prepare<{ count: number }, []>(
+    `SELECT COUNT(*) as count FROM runs WHERE status = 'queued'`
+  ).get()?.count ?? 0;
+}
+
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {
   // Find the original (non-fix, non-revision) run that created this PR
   if (projectKey) {
