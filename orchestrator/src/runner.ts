@@ -68,6 +68,13 @@ import type {
 
 const ulid = monotonicFactory();
 
+class NonRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonRetryableError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SSE broadcaster hook
 // ---------------------------------------------------------------------------
@@ -787,7 +794,7 @@ export async function executeRun(
     const hasCommits = await hasLocalCommits(worktreePath!);
 
     if (!hasCommits) {
-      throw new Error(`No commits made after ${completedSessions} session(s) — nothing to push`);
+      throw new NonRetryableError(`No commits made after ${completedSessions} session(s) — nothing to push`);
     }
 
     if (run.is_fix && run.fix_type === 'merge_conflict') {
@@ -865,23 +872,30 @@ export async function executeRun(
     const failedRun = getRun(runId);
     if (failedRun) broadcastSSE({ type: 'run_update', run: failedRun });
 
+    const isNonRetryable = err instanceof NonRetryableError;
+
     if (!run.is_fix) {
       const nextAttempt = (run.retry_attempt ?? 0) + 1;
-      if (nextAttempt <= config.maxRunRetries) {
+      if (!isNonRetryable && nextAttempt <= config.maxRunRetries) {
         const retryLabel = `${nextAttempt}/${config.maxRunRetries}`;
         bufferLog(runId, 'system', `[runner] Scheduling retry ${retryLabel} in ${config.runRetryDelayMs / 1000}s...`);
         commentOnIssue(issue.key, `Run failed (attempt ${nextAttempt}/${config.maxRunRetries}). Retrying in ${config.runRetryDelayMs / 1000}s...\nError: ${errorMessage.slice(0, 150)}`);
 
-        setTimeout(() => {
-          const retryRunId = enqueueRetry(run, issue);
-          if (retryRunId) {
-            console.log(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
-          }
-        }, config.runRetryDelayMs);
+        // Insert retry run into DB immediately (blocks poll loop from re-spawning),
+        // but delay adding it to the in-memory queue.
+        const retryRunId = enqueueRetry(run, issue, config.runRetryDelayMs);
+        if (retryRunId) {
+          console.log(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
+        }
       } else {
         updateLinearStatus(issue.key, 'Failed');
-        commentOnIssue(issue.key, `Agent run failed after ${config.maxRunRetries} retries. Manual investigation needed.\nLast error: ${errorMessage.slice(0, 200)}`);
-        bufferLog(runId, 'system', `[runner] All ${config.maxRunRetries} retries exhausted for ${issue.key}`);
+        const reason = isNonRetryable
+          ? `Agent run failed (non-retryable): ${errorMessage.slice(0, 200)}`
+          : `Agent run failed after ${config.maxRunRetries} retries. Manual investigation needed.\nLast error: ${errorMessage.slice(0, 200)}`;
+        commentOnIssue(issue.key, reason);
+        bufferLog(runId, 'system', isNonRetryable
+          ? `[runner] Non-retryable failure for ${issue.key}: ${errorMessage}`
+          : `[runner] All ${config.maxRunRetries} retries exhausted for ${issue.key}`);
       }
     } else {
       commentOnIssue(issue.key, `Fix attempt failed (${run.fix_type}, attempt ${run.fix_attempt}): ${errorMessage.slice(0, 200)}`);
@@ -995,6 +1009,7 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
 export function enqueueRetry(
   failedRun: Run,
   issue: Issue,
+  delayMs = 0,
 ): string | null {
   if (failedRun.is_fix) return null;
 
@@ -1025,13 +1040,22 @@ export function enqueueRetry(
     base_branch: failedRun.base_branch ?? null,
   };
 
+  // Insert into DB immediately so hasActiveRunForIssue() sees it
+  // and the poll loop won't spawn a duplicate run during the delay.
   insertRun(newRun);
 
   const fullRun = getRun(newRun.id);
   if (!fullRun) return null;
 
-  enqueueWithIssue(fullRun, issue);
   broadcastSSE({ type: 'run_update', run: fullRun });
+
+  if (delayMs > 0) {
+    setTimeout(() => {
+      enqueueWithIssue(fullRun, issue);
+    }, delayMs);
+  } else {
+    enqueueWithIssue(fullRun, issue);
+  }
 
   return newRun.id;
 }
