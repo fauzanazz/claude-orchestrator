@@ -65,6 +65,10 @@ export interface Run {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Persisted issue metadata for restart recovery (optional — absent on legacy rows)
+  design_path?: string | null;
+  issue_repo?: string | null;
+  base_branch?: string | null;
 }
 
 // SSE event types

@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
-import type { Run, RunStatus, LogEntry, FixTracking } from './types.ts';
+import type { Run, RunStatus, LogEntry, FixTracking, Issue } from './types.ts';
 
 export const db = new Database(join(import.meta.dir, '..', 'orchestrator.db'), {
   create: true,
@@ -70,6 +70,11 @@ try { db.run('ALTER TABLE runs ADD COLUMN is_fix INTEGER NOT NULL DEFAULT 0'); }
 try { db.run('ALTER TABLE runs ADD COLUMN fix_type TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
 
+// Migrate: add issue metadata columns for restart persistence
+try { db.run('ALTER TABLE runs ADD COLUMN design_path TEXT'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN issue_repo TEXT'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN base_branch TEXT'); } catch {}
+
 db.run(`
   CREATE TABLE IF NOT EXISTS fix_tracking (
     repo          TEXT NOT NULL,
@@ -95,12 +100,12 @@ try {
 
 // Prepared statements
 const stmtInsertRun = db.prepare<void, [
-  string, string, string, string, string, string, string, string, number, number, string | null, number, number | null
+  string, string, string, string, string, string, string, string, number, number, string | null, number, number | null, string | null, string | null, string | null
 ]>(`
   INSERT OR IGNORE INTO runs
-    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, pr_number)
+    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, pr_number, design_path, issue_repo, base_branch)
   VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const stmtGetRunById = db.prepare<Run, [string]>(`
@@ -117,10 +122,6 @@ const stmtGetRunsByStatus = db.prepare<Run, [string]>(`
 
 const stmtInsertLog = db.prepare<void, [string, string, string]>(`
   INSERT INTO logs (run_id, stream, content) VALUES (?, ?, ?)
-`);
-
-const stmtGetLogsForRun = db.prepare<LogEntry, [string]>(`
-  SELECT * FROM logs WHERE run_id = ? ORDER BY id ASC
 `);
 
 const stmtMarkStaleRunsFailed = db.prepare<void, []>(`
@@ -165,7 +166,24 @@ export function insertRun(
     run.fix_type ?? null,
     run.fix_attempt,
     run.pr_number ?? null,
+    run.design_path ?? null,
+    run.issue_repo ?? null,
+    run.base_branch ?? null,
   );
+}
+
+export function getIssueForRun(run: Run): Issue | null {
+  if (!run.design_path || !run.issue_repo || !run.base_branch) return null;
+  return {
+    id: run.issue_id,
+    key: run.issue_key,
+    title: run.issue_title,
+    description: '', // not needed for execution
+    designPath: run.design_path,
+    branch: run.branch,
+    repo: run.issue_repo,
+    baseBranch: run.base_branch,
+  };
 }
 
 export function updateRunStatus(

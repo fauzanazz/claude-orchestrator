@@ -19,6 +19,7 @@ import {
   markFixExhausted,
   clearFixTracking,
   getRunByPRNumber,
+  getIssueForRun,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -795,6 +796,9 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    design_path: issue.designPath,
+    issue_repo: issue.repo,
+    base_branch: issue.baseBranch,
   };
 
   insertRun(newRun);
@@ -834,6 +838,9 @@ export function enqueueFix(
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    design_path: issue.designPath,
+    issue_repo: issue.repo,
+    base_branch: issue.baseBranch,
   };
 
   insertRun(newRun);
@@ -856,8 +863,12 @@ export async function tick(): Promise<void> {
   const run = queue.shift()!;
   running++;
 
-  // Look up issue metadata from the sidecar map
-  const issueData = issueMap.get(run.id);
+  // Look up issue metadata: try in-memory map first (for in-flight runs),
+  // then fall back to DB-persisted columns (for runs surviving a restart).
+  let issueData = issueMap.get(run.id);
+  if (!issueData) {
+    issueData = getIssueForRun(run) ?? undefined;
+  }
 
   if (!issueData) {
     console.error(`[runner] tick: no issue data for run ${run.id}`);
@@ -1088,8 +1099,8 @@ export function startRunner(): void {
   const queuedRuns = getRunsByStatus('queued');
   if (queuedRuns.length > 0) {
     console.log(`[runner] Re-queuing ${queuedRuns.length} persisted queued run(s)`);
-    // Note: issueMap entries are not persisted, so these will fail at tick() time
-    // with "no issue data". This is acceptable — operators re-trigger from Linear.
+    // Issue metadata is persisted in the runs table (design_path, issue_repo, base_branch),
+    // so tick() will reconstruct it via getIssueForRun() on the DB-fetched run.
     for (const run of queuedRuns) {
       enqueue(run);
     }
@@ -1149,6 +1160,9 @@ export function startRunner(): void {
           iterations: 0,
           error_summary: null,
           pr_url: null,
+          design_path: issue.designPath,
+          issue_repo: issue.repo,
+          base_branch: issue.baseBranch,
         };
 
         // insertRun uses INSERT OR IGNORE on (issue_id, status) for 'queued'/'running',
