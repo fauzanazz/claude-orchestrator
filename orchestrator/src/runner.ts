@@ -740,15 +740,31 @@ export async function executeRun(
       error_summary: errorMessage.slice(0, 500),
       completed_at: new Date().toISOString(),
     });
-    if (run.is_fix) {
-      commentOnIssue(issue.key, `Fix attempt failed (${run.fix_type}, attempt ${run.fix_attempt}): ${errorMessage.slice(0, 200)}`);
-    } else {
-      updateLinearStatus(issue.key, 'Failed');
-      commentOnIssue(issue.key, `Agent run failed: ${errorMessage.slice(0, 200)}`);
-    }
 
-    const updatedRun = getRun(runId);
-    if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
+    const failedRun = getRun(runId);
+    if (failedRun) broadcastSSE({ type: 'run_update', run: failedRun });
+
+    if (!run.is_fix) {
+      const nextAttempt = (run.retry_attempt ?? 0) + 1;
+      if (nextAttempt <= config.maxRunRetries) {
+        const retryLabel = `${nextAttempt}/${config.maxRunRetries}`;
+        bufferLog(runId, 'system', `[runner] Scheduling retry ${retryLabel} in ${config.runRetryDelayMs / 1000}s...`);
+        commentOnIssue(issue.key, `Run failed (attempt ${nextAttempt}/${config.maxRunRetries}). Retrying in ${config.runRetryDelayMs / 1000}s...\nError: ${errorMessage.slice(0, 150)}`);
+
+        setTimeout(() => {
+          const retryRunId = enqueueRetry(run, issue);
+          if (retryRunId) {
+            console.log(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
+          }
+        }, config.runRetryDelayMs);
+      } else {
+        updateLinearStatus(issue.key, 'Failed');
+        commentOnIssue(issue.key, `Agent run failed after ${config.maxRunRetries} retries. Manual investigation needed.\nLast error: ${errorMessage.slice(0, 200)}`);
+        bufferLog(runId, 'system', `[runner] All ${config.maxRunRetries} retries exhausted for ${issue.key}`);
+      }
+    } else {
+      commentOnIssue(issue.key, `Fix attempt failed (${run.fix_type}, attempt ${run.fix_attempt}): ${errorMessage.slice(0, 200)}`);
+    }
 
   } finally {
     flushLogs(runId);
@@ -812,6 +828,7 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
     is_fix: 0,
     fix_type: null,
     fix_attempt: 0,
+    retry_attempt: 0,
     pr_number: prNumber,
     agent_pid: null,
     iterations: 0,
@@ -830,6 +847,50 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
     enqueueWithIssue(fullRun, issue);
     broadcastSSE({ type: 'run_update', run: fullRun });
   }
+
+  return newRun.id;
+}
+
+export function enqueueRetry(
+  failedRun: Run,
+  issue: Issue,
+): string | null {
+  if (failedRun.is_fix) return null;
+
+  const nextAttempt = (failedRun.retry_attempt ?? 0) + 1;
+  if (nextAttempt > config.maxRunRetries) return null;
+
+  const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
+    id: ulid(),
+    project: failedRun.project,
+    issue_id: failedRun.issue_id,
+    issue_key: failedRun.issue_key,
+    issue_title: failedRun.issue_title,
+    branch: failedRun.branch,
+    worktree_path: failedRun.worktree_path,
+    status: 'queued',
+    is_revision: failedRun.is_revision,
+    is_fix: 0,
+    fix_type: null,
+    fix_attempt: 0,
+    retry_attempt: nextAttempt,
+    pr_number: failedRun.pr_number,
+    agent_pid: null,
+    iterations: 0,
+    error_summary: null,
+    pr_url: null,
+    design_path: failedRun.design_path ?? null,
+    issue_repo: failedRun.issue_repo ?? null,
+    base_branch: failedRun.base_branch ?? null,
+  };
+
+  insertRun(newRun);
+
+  const fullRun = getRun(newRun.id);
+  if (!fullRun) return null;
+
+  enqueueWithIssue(fullRun, issue);
+  broadcastSSE({ type: 'run_update', run: fullRun });
 
   return newRun.id;
 }
@@ -854,6 +915,7 @@ export function enqueueFix(
     is_fix: 1,
     fix_type: fixType,
     fix_attempt: attempt,
+    retry_attempt: 0,
     pr_number: prNumber,
     agent_pid: null,
     iterations: 0,
@@ -1177,6 +1239,7 @@ export function startRunner(): void {
           is_fix: 0,
           fix_type: null,
           fix_attempt: 0,
+          retry_attempt: 0,
           pr_number: null,
           agent_pid: null,
           iterations: 0,

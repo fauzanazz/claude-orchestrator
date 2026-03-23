@@ -117,6 +117,8 @@ app.get('/health', (c) => {
     status: 'ok',
     uptime_seconds: Math.floor((Date.now() - startTime) / 1000),
     db: dbStatus,
+    maxRunRetries: config.maxRunRetries,
+    maxFixRetries: config.maxFixRetries,
   });
 });
 
@@ -184,6 +186,7 @@ app.post('/api/runs/:id/retry', async (c) => {
     is_fix: original.is_fix ?? 0,
     fix_type: original.fix_type ?? null,
     fix_attempt: original.fix_attempt ?? 0,
+    retry_attempt: 0,
     pr_number: original.pr_number,
     agent_pid: null,
     iterations: 0,

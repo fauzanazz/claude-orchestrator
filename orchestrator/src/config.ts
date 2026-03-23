@@ -49,6 +49,8 @@ export const config = {
   notifyPollIntervalMs: parseInt(process.env.NOTIFY_POLL_INTERVAL_MS ?? '120000', 10),
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
   maxFixRetries: parseInt(process.env.MAX_FIX_RETRIES ?? '3', 10),
+  maxRunRetries: parseIntEnv('MAX_RUN_RETRIES', 3),
+  runRetryDelayMs: parseIntEnv('RUN_RETRY_DELAY_MS', 30000),
   fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
 
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),
