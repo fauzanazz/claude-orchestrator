@@ -47,6 +47,7 @@ TEAM=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearTeam' "$PROJECTS")
 PROFILE=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearProfile // empty' "$PROJECTS")
 BASE_BRANCH=$(jq -r --arg k "$PROJECT_KEY" '.[$k].baseBranch // "main"' "$PROJECTS")
 REPO=$(jq -r --arg k "$PROJECT_KEY" '.[$k].repo' "$PROJECTS")
+LINEAR_PROJECT=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearProject // empty' "$PROJECTS")
 
 if [ "$PROJECT_PATH" = "null" ]; then
   echo "Error: project '$PROJECT_KEY' not found in projects.json" >&2
@@ -135,6 +136,9 @@ PROFILE_FLAG=""
 PARENT_FLAG=""
 [ -n "$PARENT_ISSUE" ] && PARENT_FLAG="--parent $PARENT_ISSUE"
 
+PROJECT_FLAG=""
+[ -n "$LINEAR_PROJECT" ] && PROJECT_FLAG="--project $LINEAR_PROJECT"
+
 DESCRIPTION="design: ${DESIGN_PATH}
 branch: ${BRANCH}
 repo: ${REPO}"
@@ -146,7 +150,8 @@ ISSUE_KEY=$(retry lineark issues create "$TITLE" \
   --description "$DESCRIPTION" \
   --format json \
   $PARENT_FLAG \
-  $PROFILE_FLAG | jq -r '.identifier') || {
+  $PROFILE_FLAG \
+  $PROJECT_FLAG | jq -r '.identifier') || {
     echo "Error: failed to create Linear issue after retries" >&2
     echo "Branch $BRANCH was pushed. Create the issue manually or re-run." >&2
     exit 1
@@ -156,3 +161,4 @@ echo "Branch created: ${BRANCH}"
 echo "Design committed: ${DESIGN_PATH}"
 echo "Issue created: ${ISSUE_KEY} (Ready for Agent)"
 [ -n "$PARENT_ISSUE" ] && echo "Parent issue: ${PARENT_ISSUE}"
+[ -n "$LINEAR_PROJECT" ] && echo "Linear project: ${LINEAR_PROJECT}"

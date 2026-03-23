@@ -1,22 +1,12 @@
 [
-  { "name": "add-zod-dependency", "description": "Add zod package to orchestrator dependencies", "passes": false },
-  { "name": "create-schemas-file", "description": "Create schemas.ts with Zod schemas for all CLI output boundaries", "passes": false },
-  { "name": "validate-linear-list-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for list output", "passes": false },
-  { "name": "validate-linear-read-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for read output", "passes": false },
-  { "name": "validate-linear-reconstruct-output", "description": "Replace JSON.parse + as cast with Zod validation in reconstructIssueFromRun()", "passes": false },
-  { "name": "validate-gh-pr-list-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRList() in notify.ts", "passes": false },
-  { "name": "validate-gh-pr-view-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRView() in notify.ts", "passes": false },
-  { "name": "validate-gh-review-poll-output", "description": "Replace JSON.parse + as cast with Zod validation in pollReviews() in runner.ts", "passes": false },
-  { "name": "validate-gh-run-list-output", "description": "Replace JSON.parse + as cast with Zod validation in fetchCIFailureLogs() in runner.ts", "passes": false },
-  { "name": "schema-unit-tests", "description": "Unit tests for all schemas: valid input, missing required fields, wrong types, passthrough, defaults", "passes": false }
-  { "name": "retention-config", "description": "Add logRetentionDays, runRetentionDays, cleanupIntervalMs config values", "passes": true },
-  { "name": "delete-old-logs", "description": "Add deleteOldLogs function to db.ts", "passes": true },
-  { "name": "delete-old-runs", "description": "Add deleteOldRuns function to db.ts (with cascading log deletion)", "passes": true },
-  { "name": "delete-old-reviews", "description": "Add deleteOldProcessedReviews function to db.ts", "passes": true },
-  { "name": "delete-old-notifications", "description": "Add deleteOldNotifiedPRs function to db.ts", "passes": true },
-  { "name": "vacuum-database", "description": "Add vacuumDatabase function to db.ts", "passes": true },
-  { "name": "get-database-size", "description": "Add getDatabaseSize function to db.ts", "passes": true },
-  { "name": "cleanup-scheduler", "description": "Add runCleanup function and integrate with startRunner interval", "passes": true },
-  { "name": "env-example", "description": "Add retention env vars to .env.example", "passes": true },
-  { "name": "unit-tests", "description": "Write unit tests for all cleanup functions in db.test.ts", "passes": true }
+  { "name": "typescript-type", "description": "Add linearProject optional field to ProjectConfig in types.ts", "passes": true },
+  { "name": "init-flag-parsing", "description": "Add --linear-project flag parsing to init-project.sh", "passes": true },
+  { "name": "init-help-text", "description": "Update help text in init-project.sh to include --linear-project flag", "passes": true },
+  { "name": "init-project-create-reuse", "description": "Auto-create or reuse Linear Project in init-project.sh (with warning on failure)", "passes": true },
+  { "name": "init-write-config", "description": "Write linearProject to projects.json in init-project.sh registration step", "passes": true },
+  { "name": "init-summary-output", "description": "Show Linear project name in init-project.sh done output", "passes": true },
+  { "name": "submit-read-config", "description": "Read linearProject from projects.json in submit.sh", "passes": true },
+  { "name": "submit-project-flag", "description": "Pass --project flag to lineark issues create in submit.sh", "passes": true },
+  { "name": "submit-success-output", "description": "Show Linear project in submit.sh success output", "passes": true },
+  { "name": "backward-compat", "description": "Entries without linearProject work exactly as before (no errors)", "passes": true }
 ]
