@@ -64,4 +64,5 @@ export const config = {
 
   // Memory agent (Gemini Flash 2 post-run documentation)
   geminiApiKey: process.env.GEMINI_API_KEY,
+  memoryProject: process.env.MEMORY_PROJECT,
 };

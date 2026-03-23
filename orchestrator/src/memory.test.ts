@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { scrubSensitiveData, scrubRunContext } from './memory.ts';
+import { scrubSensitiveData, scrubRunContext, truncateContext } from './memory.ts';
 import type { RunContext } from './memory.ts';
 
 describe('scrubSensitiveData', () => {
@@ -181,5 +181,58 @@ describe('scrubRunContext', () => {
     const original = { ...context };
     scrubRunContext(context);
     expect(context).toEqual(original);
+  });
+});
+
+describe('truncateContext', () => {
+  test('returns context unchanged when under limit', () => {
+    const context: RunContext = {
+      agentLogs: 'short logs',
+      gitDiff: 'short diff',
+      designDoc: 'short doc',
+    };
+    expect(truncateContext(context)).toEqual(context);
+  });
+
+  test('truncates agent logs from the beginning when over limit', () => {
+    const bigLogs = 'A'.repeat(4_000_000);
+    const context: RunContext = {
+      agentLogs: bigLogs,
+      gitDiff: 'small diff',
+      designDoc: 'small doc',
+    };
+    const result = truncateContext(context);
+    // Design doc and diff should be preserved
+    expect(result.designDoc).toBe('small doc');
+    expect(result.gitDiff).toBe('small diff');
+    // Logs should be truncated (kept from the end / most recent)
+    expect(result.agentLogs.length).toBeLessThan(bigLogs.length);
+    expect(result.agentLogs.length).toBeGreaterThan(0);
+  });
+
+  test('prioritizes designDoc over gitDiff over agentLogs', () => {
+    const bigDoc = 'D'.repeat(2_000_000);
+    const bigDiff = 'G'.repeat(2_000_000);
+    const bigLogs = 'L'.repeat(2_000_000);
+    const context: RunContext = {
+      agentLogs: bigLogs,
+      gitDiff: bigDiff,
+      designDoc: bigDoc,
+    };
+    const result = truncateContext(context);
+    // designDoc should get the most space
+    expect(result.designDoc.length).toBeGreaterThan(result.gitDiff.length);
+    // Total should be within budget
+    const total = result.designDoc.length + result.gitDiff.length + result.agentLogs.length;
+    expect(total).toBeLessThanOrEqual(3_200_000);
+  });
+
+  test('handles empty fields gracefully', () => {
+    const context: RunContext = {
+      agentLogs: '',
+      gitDiff: '',
+      designDoc: '',
+    };
+    expect(truncateContext(context)).toEqual(context);
   });
 });
