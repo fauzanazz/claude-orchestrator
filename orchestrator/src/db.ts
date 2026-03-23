@@ -70,6 +70,9 @@ try { db.run('ALTER TABLE runs ADD COLUMN is_fix INTEGER NOT NULL DEFAULT 0'); }
 try { db.run('ALTER TABLE runs ADD COLUMN fix_type TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
 
+// Migrate: add retry_attempt column for auto-retry
+try { db.run('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
+
 // Migrate: add issue metadata columns for restart persistence
 try { db.run('ALTER TABLE runs ADD COLUMN design_path TEXT'); } catch {}
 try { db.run('ALTER TABLE runs ADD COLUMN issue_repo TEXT'); } catch {}
@@ -100,12 +103,12 @@ try {
 
 // Prepared statements
 const stmtInsertRun = db.prepare<void, [
-  string, string, string, string, string, string, string, string, number, number, string | null, number, number | null, string | null, string | null, string | null
+  string, string, string, string, string, string, string, string, number, number, string | null, number, number, number | null, string | null, string | null, string | null
 ]>(`
   INSERT OR IGNORE INTO runs
-    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, pr_number, design_path, issue_repo, base_branch)
+    (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, retry_attempt, pr_number, design_path, issue_repo, base_branch)
   VALUES
-    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const stmtGetRunById = db.prepare<Run, [string]>(`
@@ -165,6 +168,7 @@ export function insertRun(
     run.is_fix,
     run.fix_type ?? null,
     run.fix_attempt,
+    run.retry_attempt,
     run.pr_number ?? null,
     run.design_path ?? null,
     run.issue_repo ?? null,
