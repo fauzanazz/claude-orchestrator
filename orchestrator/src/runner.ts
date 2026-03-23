@@ -20,6 +20,7 @@ import {
   clearFixTracking,
   getRunByPRNumber,
   getIssueForRun,
+  getPRNumberByIssueKey,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -149,11 +150,13 @@ export async function pollLinear(): Promise<LinearIssue[]> {
       typeof full.description === 'string' &&
       full.description.includes('design:')
     ) {
+      const parent = full.parent as { id: string; identifier: string } | null | undefined;
       issues.push({
         id: full.id as string,
         identifier: full.identifier as string,
         title: full.title as string,
         description: full.description as string,
+        parent: parent ?? undefined,
       });
     }
   }
@@ -263,6 +266,8 @@ export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
     throw new Error(`Project not found for repo: ${meta.repo}`);
   }
 
+  const parent = linearIssue.parent as { id: string; identifier: string } | null | undefined;
+
   return {
     id: linearIssue.id as string,
     key: run.issue_key,
@@ -272,6 +277,7 @@ export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
     branch: meta.branch,
     repo: meta.repo,
     baseBranch: resolved.project.baseBranch,
+    parentKey: parent?.identifier ?? null,
   };
 }
 
@@ -701,12 +707,24 @@ export async function executeRun(
       prUrl = `https://github.com/${issue.repo}/pull/${run.pr_number}`;
       bufferLog(runId, 'system', `[runner] Updated existing PR: ${prUrl}`);
     } else {
+      let prBody = `Automated implementation for ${issue.key}.\n\nDesign: \`${issue.designPath}\``;
+
+      if (issue.parentKey) {
+        const parentPR = getPRNumberByIssueKey(issue.parentKey);
+        if (parentPR) {
+          prBody += `\n\nDepends on #${parentPR}`;
+          bufferLog(runId, 'system', `[runner] Linked PR to parent ${issue.parentKey} (PR #${parentPR})`);
+        } else {
+          bufferLog(runId, 'system', `[runner] Parent ${issue.parentKey} has no PR yet — skipping dependency link`);
+        }
+      }
+
       prUrl = await createPR({
         repo: issue.repo,
         base: issue.baseBranch,
         head: issue.branch,
         title: `[${issue.key}] ${issue.title}`,
-        body: `Automated implementation for ${issue.key}.\n\nDesign: \`${issue.designPath}\``,
+        body: prBody,
         reviewer: config.githubUsername,
       });
       bufferLog(runId, 'system', `[runner] Created PR: ${prUrl}`);
@@ -1152,6 +1170,7 @@ export function startRunner(): void {
           branch: meta.branch,
           repo: meta.repo,
           baseBranch: resolved.project.baseBranch,
+          parentKey: (linearIssue as any).parent?.identifier ?? null,
         };
 
         const worktreePath = join(

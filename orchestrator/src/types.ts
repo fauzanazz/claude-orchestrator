@@ -41,6 +41,7 @@ export interface Issue extends ParsedIssueMetadata {
   title: string;
   description: string;
   baseBranch: string;
+  parentKey: string | null;  // parent issue identifier (e.g. "FAU-9")
 }
 
 // Database run record

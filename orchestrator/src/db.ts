@@ -183,6 +183,7 @@ export function getIssueForRun(run: Run): Issue | null {
     branch: run.branch,
     repo: run.issue_repo,
     baseBranch: run.base_branch,
+    parentKey: null, // not available from DB, but PR linking is best-effort
   };
 }
 
@@ -394,6 +395,21 @@ export function markFixExhausted(repo: string, prNumber: number, fixType: string
 
 export function clearFixTracking(repo: string, prNumber: number, fixType: string): void {
   stmtClearFixTracking.run(repo, prNumber, fixType);
+}
+
+const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`
+  SELECT pr_number FROM runs
+  WHERE issue_key = ?
+    AND pr_number IS NOT NULL
+    AND is_fix = 0
+    AND is_revision = 0
+    AND status = 'success'
+  ORDER BY created_at DESC LIMIT 1
+`);
+
+export function getPRNumberByIssueKey(issueKey: string): number | null {
+  const row = stmtGetPRByIssueKey.get(issueKey);
+  return row?.pr_number ?? null;
 }
 
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {

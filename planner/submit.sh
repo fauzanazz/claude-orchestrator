@@ -9,6 +9,27 @@ SLUG="$2"
 TITLE="$3"
 PRIORITY="${4:-3}"
 
+PARENT_ISSUE=""
+
+# Parse optional flags after positional args
+shift 4 2>/dev/null || shift $#
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --parent)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "Error: --parent requires an issue identifier (e.g. FAU-9)" >&2
+        exit 1
+      fi
+      PARENT_ISSUE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: unknown flag '$1'" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # --- Resolve project config ---
 PROJECT_PATH=$(jq -r --arg k "$PROJECT_KEY" '.[$k].path' "$PROJECTS")
 TEAM=$(jq -r --arg k "$PROJECT_KEY" '.[$k].linearTeam' "$PROJECTS")
@@ -100,6 +121,9 @@ WORKTREE_PATH=""
 PROFILE_FLAG=""
 [ -n "$PROFILE" ] && PROFILE_FLAG="--profile $PROFILE"
 
+PARENT_FLAG=""
+[ -n "$PARENT_ISSUE" ] && PARENT_FLAG="--parent $PARENT_ISSUE"
+
 DESCRIPTION="design: ${DESIGN_PATH}
 branch: ${BRANCH}
 repo: ${REPO}"
@@ -110,6 +134,7 @@ ISSUE_KEY=$(retry lineark issues create "$TITLE" \
   -s "Ready for Agent" \
   --description "$DESCRIPTION" \
   --format json \
+  $PARENT_FLAG \
   $PROFILE_FLAG | jq -r '.identifier') || {
     echo "Error: failed to create Linear issue after retries" >&2
     echo "Branch $BRANCH was pushed. Create the issue manually or re-run." >&2
@@ -119,3 +144,4 @@ ISSUE_KEY=$(retry lineark issues create "$TITLE" \
 echo "Branch created: ${BRANCH}"
 echo "Design committed: ${DESIGN_PATH}"
 echo "Issue created: ${ISSUE_KEY} (Ready for Agent)"
+[ -n "$PARENT_ISSUE" ] && echo "Parent issue: ${PARENT_ISSUE}"
