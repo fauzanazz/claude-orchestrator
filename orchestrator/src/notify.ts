@@ -267,30 +267,78 @@ export async function sendFixExhaustedNotification(
 // Shared PR status fetching
 // ---------------------------------------------------------------------------
 
+function createSemaphore(max: number) {
+  let current = 0;
+  const queue: (() => void)[] = [];
+  return {
+    async acquire() {
+      if (current < max) { current++; return; }
+      await new Promise<void>(resolve => queue.push(resolve));
+      current++;
+    },
+    release() {
+      current--;
+      const next = queue.shift();
+      if (next) next();
+    },
+  };
+}
+
 export async function fetchAllPRStatuses(): Promise<Map<string, GHPRView[]>> {
   const projects = loadProjects();
   const result = new Map<string, GHPRView[]>();
 
-  for (const [, project] of Object.entries(projects)) {
-    const repo = project.repo;
-    if (!repo) continue;
+  // Collect unique, non-empty repos
+  const uniqueRepos = [...new Set(
+    Object.values(projects)
+      .map((p) => p.repo)
+      .filter((r): r is string => !!r),
+  )];
 
-    try {
-      const openPRs = await ghPRList(repo);
+  const sem = createSemaphore(5);
+
+  // Parallelize ghPRList across all unique repos
+  const repoResults = await Promise.allSettled(
+    uniqueRepos.map(async (repo) => {
+      await sem.acquire();
+      let openPRs: GHPRListItem[];
+      try {
+        openPRs = await ghPRList(repo);
+      } finally {
+        sem.release();
+      }
+
+      // Parallelize ghPRView calls within this repo
+      const prViewResults = await Promise.allSettled(
+        openPRs.map(async ({ number: prNumber }) => {
+          await sem.acquire();
+          try {
+            return await ghPRView(repo, prNumber);
+          } finally {
+            sem.release();
+          }
+        }),
+      );
+
       const prViews: GHPRView[] = [];
-
-      for (const { number: prNumber } of openPRs) {
-        const prData = await ghPRView(repo, prNumber);
-        if (prData) prViews.push(prData);
+      for (const r of prViewResults) {
+        if (r.status === 'fulfilled' && r.value) prViews.push(r.value);
       }
 
-      if (prViews.length > 0) {
-        result.set(repo, prViews);
-      }
-    } catch (err) {
-      console.error(`[notify] Error fetching PRs for ${repo}:`, err);
+      return { repo, prViews };
+    }),
+  );
+
+  repoResults.forEach((settled, i) => {
+    if (settled.status === 'rejected') {
+      console.error(`[notify] Error fetching PRs for ${uniqueRepos[i] ?? 'unknown'}:`, settled.reason);
+      return;
     }
-  }
+    const { repo, prViews } = settled.value;
+    if (prViews.length > 0) {
+      result.set(repo, prViews);
+    }
+  });
 
   return result;
 }
