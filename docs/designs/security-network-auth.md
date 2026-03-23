@@ -45,7 +45,7 @@ import { randomBytes } from 'node:crypto';
 let apiToken: string | null = config.apiToken;
 if (!apiToken) {
   apiToken = randomBytes(32).toString('hex');
-  console.log(`[server] Generated ephemeral API token: ${apiToken}`);
+  console.log(`[server] Generated ephemeral API token: ${apiToken.slice(0, 8)}…`);
   console.log(`[server] Set API_TOKEN env var to persist across restarts`);
 }
 ```
