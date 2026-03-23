@@ -1,12 +1,12 @@
 [
-  { "name": "retry-attempt-column", "description": "Add retry_attempt column migration to runs table", "passes": true },
-  { "name": "retry-attempt-type", "description": "Add retry_attempt to Run interface in types.ts", "passes": true },
-  { "name": "insert-run-retry-field", "description": "Update insertRun prepared statement to include retry_attempt", "passes": true },
-  { "name": "retry-config", "description": "Add MAX_RUN_RETRIES and RUN_RETRY_DELAY_MS config values", "passes": true },
-  { "name": "enqueue-retry-function", "description": "Add enqueueRetry function for auto-retry on failure", "passes": true },
-  { "name": "execute-run-catch-retry", "description": "Update executeRun catch block with retry-aware logic", "passes": true },
-  { "name": "run-creation-retry-field", "description": "Set retry_attempt: 0 in all run creation sites", "passes": true },
-  { "name": "manual-retry-reset", "description": "Manual retry via dashboard resets retry_attempt to 0", "passes": true },
-  { "name": "dashboard-retry-badge", "description": "Show retry attempt info in dashboard Type column", "passes": true },
-  { "name": "health-endpoint-config", "description": "Expose maxRunRetries and maxFixRetries in /health endpoint", "passes": true }
+  { "name": "add-zod-dependency", "description": "Add zod package to orchestrator dependencies", "passes": false },
+  { "name": "create-schemas-file", "description": "Create schemas.ts with Zod schemas for all CLI output boundaries", "passes": false },
+  { "name": "validate-linear-list-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for list output", "passes": false },
+  { "name": "validate-linear-read-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for read output", "passes": false },
+  { "name": "validate-linear-reconstruct-output", "description": "Replace JSON.parse + as cast with Zod validation in reconstructIssueFromRun()", "passes": false },
+  { "name": "validate-gh-pr-list-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRList() in notify.ts", "passes": false },
+  { "name": "validate-gh-pr-view-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRView() in notify.ts", "passes": false },
+  { "name": "validate-gh-review-poll-output", "description": "Replace JSON.parse + as cast with Zod validation in pollReviews() in runner.ts", "passes": false },
+  { "name": "validate-gh-run-list-output", "description": "Replace JSON.parse + as cast with Zod validation in fetchCIFailureLogs() in runner.ts", "passes": false },
+  { "name": "schema-unit-tests", "description": "Unit tests for all schemas: valid input, missing required fields, wrong types, passthrough, defaults", "passes": false }
 ]
