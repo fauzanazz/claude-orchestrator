@@ -420,6 +420,71 @@ export function getPRNumberByIssueKey(issueKey: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Database retention & cleanup
+// ---------------------------------------------------------------------------
+
+export function deleteOldLogs(retentionDays: number): number {
+  const result = db.prepare(`
+    DELETE FROM logs
+    WHERE created_at < datetime('now', '-' || ? || ' days')
+  `).run(retentionDays);
+  return result.changes;
+}
+
+export function deleteOldRuns(retentionDays: number): number {
+  const oldRunsFilter = `
+    run_id IN (
+      SELECT id FROM runs
+      WHERE status IN ('success', 'failed')
+        AND completed_at < datetime('now', '-' || ? || ' days')
+    )
+  `;
+
+  db.prepare(`DELETE FROM logs WHERE ${oldRunsFilter}`).run(retentionDays);
+  db.prepare(`DELETE FROM processed_reviews WHERE ${oldRunsFilter}`).run(retentionDays);
+  db.prepare(`DELETE FROM fix_tracking WHERE last_run_id IN (
+    SELECT id FROM runs
+    WHERE status IN ('success', 'failed')
+      AND completed_at < datetime('now', '-' || ? || ' days')
+  )`).run(retentionDays);
+
+  const result = db.prepare(`
+    DELETE FROM runs
+    WHERE status IN ('success', 'failed')
+      AND completed_at < datetime('now', '-' || ? || ' days')
+  `).run(retentionDays);
+  return result.changes;
+}
+
+export function deleteOldProcessedReviews(retentionDays: number): number {
+  const result = db.prepare(`
+    DELETE FROM processed_reviews
+    WHERE created_at < datetime('now', '-' || ? || ' days')
+  `).run(retentionDays);
+  return result.changes;
+}
+
+export function deleteOldNotifiedPRs(retentionDays: number): number {
+  const result = db.prepare(`
+    DELETE FROM notified_prs
+    WHERE notified_at < datetime('now', '-' || ? || ' days')
+  `).run(retentionDays);
+  return result.changes;
+}
+
+export function vacuumDatabase(): void {
+  db.run('VACUUM');
+}
+
+export function getDatabaseSize(): number {
+  const stat = db.prepare<{ page_count: number; page_size: number }, []>(
+    `SELECT page_count, page_size FROM pragma_page_count(), pragma_page_size()`
+  ).get();
+  if (!stat) return 0;
+  return stat.page_count * stat.page_size;
+}
+
+// ---------------------------------------------------------------------------
 // Rate limiting: retry tracking queries
 // ---------------------------------------------------------------------------
 

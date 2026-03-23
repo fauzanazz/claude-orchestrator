@@ -56,5 +56,9 @@ export const config = {
   runRetryDelayMs: parseIntEnv('RUN_RETRY_DELAY_MS', 30000),
   fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
 
+  logRetentionDays: parseIntEnv('LOG_RETENTION_DAYS', 30),
+  runRetentionDays: parseIntEnv('RUN_RETENTION_DAYS', 90),
+  cleanupIntervalMs: parseIntEnv('CLEANUP_INTERVAL_MS', 86400000), // 24 hours
+
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),
 };
