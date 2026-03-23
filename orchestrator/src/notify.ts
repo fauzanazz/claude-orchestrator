@@ -106,10 +106,29 @@ export function checkMergeReady(pr: GHPRView, repo: string): PRMergeStatus {
 }
 
 // ---------------------------------------------------------------------------
+// Text helpers
+// ---------------------------------------------------------------------------
+
+export function truncateForNotification(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen - 3) + '...';
+}
+
+export function sanitizeForSlack(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+// ---------------------------------------------------------------------------
 // macOS notification
 // ---------------------------------------------------------------------------
 
 export function sendMacOSNotification(title: string, body: string, url: string): void {
+  const safeTitle = truncateForNotification(title, 100);
+  const safeBody = truncateForNotification(body, 200);
+
   // Use terminal-notifier for clickable notifications that open the URL on click.
   // Falls back to osascript if terminal-notifier is not installed.
   const proc = Bun.spawnSync(['which', 'terminal-notifier'], { stdout: 'pipe', stderr: 'pipe' });
@@ -118,8 +137,8 @@ export function sendMacOSNotification(title: string, body: string, url: string):
     Bun.spawn(
       [
         'terminal-notifier',
-        '-title', title,
-        '-message', body,
+        '-title', safeTitle,
+        '-message', safeBody,
         '-open', url,
         '-sound', 'default',
       ],
@@ -127,13 +146,20 @@ export function sendMacOSNotification(title: string, body: string, url: string):
     );
   } else {
     // Fallback: osascript notification (no click-to-open support)
+    const escapedTitle = safeTitle.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escapedBody = safeBody.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     Bun.spawn(
       [
         'osascript', '-e',
-        `display notification "${body.replace(/"/g, '\\"')}" with title "${title.replace(/"/g, '\\"')}"`,
+        `display notification "${escapedBody}" with title "${escapedTitle}"`,
       ],
       { stdout: 'pipe', stderr: 'pipe' },
     );
+
+    // Only open validated GitHub PR URLs
+    if (/^https:\/\/github\.com\/[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+\/pull\/\d+$/.test(url)) {
+      Bun.spawn(['open', url], { stdout: 'pipe', stderr: 'pipe' });
+    }
   }
 }
 
@@ -145,7 +171,7 @@ export async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
   if (!config.slackWebhookUrl) return;
 
   const checksText = pr.checks.length > 0
-    ? pr.checks.map((c) => `${c.conclusion === 'SUCCESS' ? 'Pass' : c.conclusion}: ${c.name}`).join('\n')
+    ? pr.checks.map((c) => `${c.conclusion === 'SUCCESS' ? 'Pass' : sanitizeForSlack(c.conclusion)}: ${sanitizeForSlack(c.name)}`).join('\n')
     : 'No checks';
 
   const reviewText = pr.reviewDecision
@@ -164,10 +190,10 @@ export async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
       {
         type: 'section',
         fields: [
-          { type: 'mrkdwn', text: `*Title*\n${pr.title}` },
-          { type: 'mrkdwn', text: `*Repo*\n${pr.repo}` },
-          { type: 'mrkdwn', text: `*Branch*\n\`${pr.branch}\`` },
-          { type: 'mrkdwn', text: `*Review*\n${reviewText}` },
+          { type: 'mrkdwn', text: `*Title*\n${sanitizeForSlack(pr.title)}` },
+          { type: 'mrkdwn', text: `*Repo*\n${sanitizeForSlack(pr.repo)}` },
+          { type: 'mrkdwn', text: `*Branch*\n\`${sanitizeForSlack(pr.branch)}\`` },
+          { type: 'mrkdwn', text: `*Review*\n${sanitizeForSlack(reviewText)}` },
         ],
       },
       {
@@ -232,9 +258,9 @@ export async function sendFixExhaustedNotification(
       {
         type: 'section',
         fields: [
-          { type: 'mrkdwn', text: `*Title*\n${title}` },
-          { type: 'mrkdwn', text: `*Repo*\n${repo}` },
-          { type: 'mrkdwn', text: `*Fix Type*\n${typeLabel}` },
+          { type: 'mrkdwn', text: `*Title*\n${sanitizeForSlack(title)}` },
+          { type: 'mrkdwn', text: `*Repo*\n${sanitizeForSlack(repo)}` },
+          { type: 'mrkdwn', text: `*Fix Type*\n${sanitizeForSlack(typeLabel)}` },
           { type: 'mrkdwn', text: `*Attempts*\n${attempts}/${config.maxFixRetries}` },
         ],
       },
