@@ -12,7 +12,7 @@ PRIORITY="3"
 PARENT_ISSUE=""
 
 # Shift past required positional args; consume optional 4th (priority) if it's not a flag
-if [[ $# -ge 4 && "$4" != -* ]]; then
+if [[ $# -ge 4 && -n "$4" && "$4" != -* ]]; then
   PRIORITY="$4"
   shift 4
 else

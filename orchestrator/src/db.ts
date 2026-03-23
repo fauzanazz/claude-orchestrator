@@ -404,7 +404,6 @@ export function clearFixTracking(repo: string, prNumber: number, fixType: string
   stmtClearFixTracking.run(repo, prNumber, fixType);
 }
 
-<<<<<<< agent/pr-dependency-linking
 const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`
   SELECT pr_number FROM runs
   WHERE issue_key = ?
@@ -418,7 +417,8 @@ const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`
 export function getPRNumberByIssueKey(issueKey: string): number | null {
   const row = stmtGetPRByIssueKey.get(issueKey);
   return row?.pr_number ?? null;
-=======
+}
+
 // ---------------------------------------------------------------------------
 // Rate limiting: retry tracking queries
 // ---------------------------------------------------------------------------
@@ -446,7 +446,6 @@ export function countTotalQueued(): number {
   return db.prepare<{ count: number }, []>(
     `SELECT COUNT(*) as count FROM runs WHERE status = 'queued'`
   ).get()?.count ?? 0;
->>>>>>> main
 }
 
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {
