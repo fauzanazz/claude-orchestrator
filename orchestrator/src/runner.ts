@@ -28,6 +28,7 @@ import {
   deleteOldNotifiedPRs,
   vacuumDatabase,
   getDatabaseSize,
+  snapshotDatabase,
   hasActiveRunForIssue,
   hasAnyRunForIssue,
 } from './db.ts';
@@ -1501,6 +1502,14 @@ export function startRunner(): void {
     tick().catch((err) => console.error('[runner] tick error:', err));
   }, 5_000);
 
+  // Snapshot DB on startup
+  try {
+    const snap = snapshotDatabase(config.maxSnapshots);
+    if (snap) console.log(`[runner] DB snapshot saved: ${snap}`);
+  } catch (err) {
+    console.error('[runner] DB snapshot failed:', err);
+  }
+
   // Database cleanup: periodic retention enforcement
   setInterval(runCleanup, config.cleanupIntervalMs);
   setTimeout(runCleanup, 30_000);
@@ -1524,6 +1533,10 @@ export function startRunner(): void {
 
 function runCleanup(): void {
   try {
+    // Snapshot before deleting anything
+    const snap = snapshotDatabase(config.maxSnapshots);
+    if (snap) console.log(`[cleanup] DB snapshot: ${snap}`);
+
     const sizeBefore = getDatabaseSize();
 
     const logsDeleted = deleteOldLogs(config.logRetentionDays);

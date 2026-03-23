@@ -59,6 +59,7 @@ export const config = {
   logRetentionDays: parseIntEnv('LOG_RETENTION_DAYS', 30),
   runRetentionDays: parseIntEnv('RUN_RETENTION_DAYS', 90),
   cleanupIntervalMs: parseIntEnv('CLEANUP_INTERVAL_MS', 86400000), // 24 hours
+  maxSnapshots: parseIntEnv('MAX_DB_SNAPSHOTS', 5),
 
   globalPromptPath: join(import.meta.dir, '..', 'global-prompt.md'),
 

@@ -1,5 +1,6 @@
 import { Database } from 'bun:sqlite';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import type { Run, RunStatus, LogEntry, FixTracking, Issue } from './types.ts';
 
 const dbPath = process.env.ORCHESTRATOR_DB_PATH ?? join(import.meta.dir, '..', 'orchestrator.db');
@@ -482,6 +483,29 @@ export function getDatabaseSize(): number {
   ).get();
   if (!stat) return 0;
   return stat.page_count * stat.page_size;
+}
+
+export function snapshotDatabase(maxSnapshots: number): string | null {
+  if (dbPath === ':memory:') return null;
+
+  const snapshotDir = join(dirname(dbPath), 'snapshots');
+  mkdirSync(snapshotDir, { recursive: true });
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const snapshotPath = join(snapshotDir, `orchestrator-${timestamp}.db`);
+
+  db.run(`VACUUM INTO '${snapshotPath.replace(/'/g, "''")}'`);
+
+  // Prune old snapshots beyond the limit
+  const files = readdirSync(snapshotDir)
+    .filter((f) => f.startsWith('orchestrator-') && f.endsWith('.db'))
+    .sort();
+  while (files.length > maxSnapshots) {
+    const oldest = files.shift()!;
+    unlinkSync(join(snapshotDir, oldest));
+  }
+
+  return snapshotPath;
 }
 
 // ---------------------------------------------------------------------------
