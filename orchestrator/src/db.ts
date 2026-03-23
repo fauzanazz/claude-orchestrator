@@ -131,6 +131,21 @@ const stmtMarkStaleRunsFailed = db.prepare<void, []>(`
   WHERE status = 'running'
 `);
 
+// Cache for dynamically-built UPDATE statements, keyed by the sorted field list.
+// This avoids recompiling SQL on every updateRunStatus call while preserving
+// the ability to update only the fields that are actually changing.
+const stmtUpdateRunStatusCache = new Map<string, ReturnType<typeof db.prepare>>();
+
+function getUpdateRunStatusStmt(fields: string[]): ReturnType<typeof db.prepare> {
+  const key = fields.join(',');
+  let stmt = stmtUpdateRunStatusCache.get(key);
+  if (!stmt) {
+    stmt = db.prepare(`UPDATE runs SET ${fields.join(', ')} WHERE id = ?`);
+    stmtUpdateRunStatusCache.set(key, stmt);
+  }
+  return stmt;
+}
+
 // Exported functions
 
 export function insertRun(
@@ -190,7 +205,7 @@ export function updateRunStatus(
 
   values.push(id);
 
-  db.prepare(`UPDATE runs SET ${fields.join(', ')} WHERE id = ?`).run(...(values as [string, ...string[]]));
+  getUpdateRunStatusStmt(fields).run(...(values as [string, ...string[]]));
 }
 
 export function getRun(id: string): Run | null {
