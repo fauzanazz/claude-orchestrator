@@ -814,13 +814,26 @@ export function flushAllLogs(): void {
 // Sidecar map: runId -> Issue (kept in memory for the lifetime of the queue item)
 const issueMap: Map<string, Issue> = new Map();
 
-export function enqueue(run: Run): void {
+export function enqueue(run: Run): boolean {
+  if (queue.length >= config.maxQueueSize) {
+    console.warn(`[runner] Queue full (${queue.length}/${config.maxQueueSize}), rejecting run ${run.id}`);
+    updateRunStatus(run.id, 'failed', {
+      error_summary: 'Queue full — run rejected',
+      completed_at: new Date().toISOString(),
+    });
+    return false;
+  }
   queue.push(run);
+  return true;
 }
 
-export function enqueueWithIssue(run: Run, issue: Issue): void {
+export function enqueueWithIssue(run: Run, issue: Issue): boolean {
   issueMap.set(run.id, issue);
-  enqueue(run);
+  const ok = enqueue(run);
+  if (!ok) {
+    issueMap.delete(run.id);
+  }
+  return ok;
 }
 
 export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue): string {

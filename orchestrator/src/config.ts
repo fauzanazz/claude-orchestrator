@@ -42,6 +42,9 @@ export const config = {
   reviewMinBodyLength: parseIntEnv('REVIEW_MIN_BODY_LENGTH', 10),
   reviewWatchMaxAgeDays: parseIntEnv('REVIEW_WATCH_MAX_AGE_DAYS', 7),
   port: parseIntEnv('PORT', 7400),
+  maxQueueSize: parseIntEnv('MAX_QUEUE_SIZE', 20),
+  maxRetriesPerRun: parseIntEnv('MAX_RETRIES_PER_RUN', 3),
+  retryCooldownMs: parseIntEnv('RETRY_COOLDOWN_MS', 60000),
 
   tunnelName: process.env.TUNNEL_NAME,
   tunnelHostname: process.env.TUNNEL_HOSTNAME,
