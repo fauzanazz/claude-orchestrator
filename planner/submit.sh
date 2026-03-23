@@ -130,28 +130,23 @@ git worktree remove "$WORKTREE_PATH" 2>/dev/null || true
 WORKTREE_PATH=""
 
 # --- Step 6: Create Linear issue ---
-PROFILE_FLAG=""
-[ -n "$PROFILE" ] && PROFILE_FLAG="--profile $PROFILE"
-
-PARENT_FLAG=""
-[ -n "$PARENT_ISSUE" ] && PARENT_FLAG="--parent $PARENT_ISSUE"
-
-PROJECT_FLAG=""
-[ -n "$LINEAR_PROJECT" ] && PROJECT_FLAG="--project $LINEAR_PROJECT"
-
 DESCRIPTION="design: ${DESIGN_PATH}
 branch: ${BRANCH}
 repo: ${REPO}"
 
-ISSUE_KEY=$(retry lineark issues create "$TITLE" \
+# Build lineark args array (avoids word-splitting issues with spaces in values)
+LINEARK_ARGS=(lineark issues create "$TITLE" \
   --team "$TEAM" \
   -p "$PRIORITY" \
   -s "Ready for Agent" \
   --description "$DESCRIPTION" \
-  --format json \
-  $PARENT_FLAG \
-  $PROFILE_FLAG \
-  $PROJECT_FLAG | jq -r '.identifier') || {
+  --format json)
+
+[ -n "$PARENT_ISSUE" ] && LINEARK_ARGS+=(--parent "$PARENT_ISSUE")
+[ -n "$PROFILE" ] && LINEARK_ARGS+=(--profile "$PROFILE")
+[ -n "$LINEAR_PROJECT" ] && LINEARK_ARGS+=(--project "$LINEAR_PROJECT")
+
+ISSUE_KEY=$(retry "${LINEARK_ARGS[@]}" | jq -r '.identifier') || {
     echo "Error: failed to create Linear issue after retries" >&2
     echo "Branch $BRANCH was pushed. Create the issue manually or re-run." >&2
     exit 1
