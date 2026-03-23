@@ -1,0 +1,7 @@
+{
+  "vault": "DevMemory",
+  "project": "claude-orchestrator",
+  "agents": [
+    "claude-code"
+  ]
+}

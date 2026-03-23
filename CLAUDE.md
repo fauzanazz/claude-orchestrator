@@ -47,3 +47,7 @@ Entry point: `orchestrator/src/index.ts` → `server.ts`
 - The runner polls Linear for new issues and manages the full lifecycle autonomously
 - All state (runs, logs, agent output) is persisted in `orchestrator/orchestrator.db`
 - Use `plan "description"` CLI (requires symlink setup) to invoke the planner
+
+# Memory System
+
+@AGENTS.md

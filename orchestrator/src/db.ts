@@ -513,6 +513,12 @@ export function countTotalQueued(): number {
   ).get()?.count ?? 0;
 }
 
+export function hasAnyRunForIssue(issueId: string): boolean {
+  return db.prepare<{ id: string }, [string]>(
+    `SELECT id FROM runs WHERE issue_id = ? LIMIT 1`
+  ).get(issueId) !== null;
+}
+
 export function hasActiveRunForIssue(issueId: string, excludeRunId?: string): boolean {
   if (excludeRunId) {
     return db.prepare<{ id: string }, [string, string]>(

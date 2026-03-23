@@ -33,3 +33,4 @@ build/
 
 # Agent orchestrator state (auto-generated)
 .agent-state/
+.agent-state/

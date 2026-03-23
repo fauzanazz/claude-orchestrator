@@ -1,5 +1,6 @@
 import { $ } from 'bun';
 import { join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { GoogleGenAI } from '@google/genai';
 import { config } from './config.ts';
 import { getLogsForRun } from './db.ts';
@@ -184,6 +185,155 @@ async function saveToObsidian(run: Run, issue: Issue, summary: GeminiSessionSumm
   console.log(`[memory] Generated project documentation for ${issue.key}`);
 }
 
+// ---------------------------------------------------------------------------
+// Project documentation update (Features, Modules, Conventions, Architecture)
+// ---------------------------------------------------------------------------
+
+const DOC_FILES = ['Features.md', 'Modules.md', 'Architecture.md', 'Conventions.md'] as const;
+
+interface ProjectDocsConfig {
+  vaultPath: string;
+  project: string;
+}
+
+function resolveDocsConfig(worktreePath: string): ProjectDocsConfig | null {
+  // Try the worktree's .obsidian-memory.json first, then walk up from orchestrator/src to repo root
+  for (const base of [worktreePath, join(import.meta.dir, '..', '..')]) {
+    const configPath = join(base, '.obsidian-memory.json');
+    if (existsSync(configPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+        if (raw.vault && raw.project) {
+          // Resolve vault path: check ~/Documents/{vault} (standard Obsidian location)
+          const home = process.env.HOME ?? '~';
+          const vaultPath = join(home, 'Documents', raw.vault);
+          if (existsSync(vaultPath)) {
+            return { vaultPath, project: raw.project };
+          }
+        }
+      } catch {}
+    }
+  }
+  return null;
+}
+
+function readExistingDocs(docsDir: string): Record<string, string> {
+  const docs: Record<string, string> = {};
+  for (const file of DOC_FILES) {
+    const filePath = join(docsDir, file);
+    if (existsSync(filePath)) {
+      docs[file] = readFileSync(filePath, 'utf-8');
+    }
+  }
+  return docs;
+}
+
+async function callGeminiForDocs(
+  run: Run,
+  issue: Issue,
+  context: RunContext,
+  existingDocs: Record<string, string>,
+): Promise<Record<string, string>> {
+  const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+
+  const docsSection = Object.entries(existingDocs)
+    .map(([name, content]) => `### ${name}\n\`\`\`markdown\n${content}\n\`\`\``)
+    .join('\n\n');
+
+  const prompt = `You are a technical documentation agent. Your job is to UPDATE project documentation based on a completed coding agent run.
+
+## Run Metadata
+- Issue: ${issue.key} — ${issue.title}
+- Branch: ${run.branch}
+- Status: ${run.status}
+- PR: ${run.pr_url ?? 'none'}
+${run.error_summary ? `- Error: ${run.error_summary}` : ''}
+
+## Design Document
+${context.designDoc || '[none]'}
+
+## Git Diff (base...HEAD)
+${context.gitDiff || '[none]'}
+
+## Current Documentation
+${docsSection}
+
+---
+
+Update the documentation files with information from this run. Rules:
+- PRESERVE all existing content — only ADD or UPDATE, never remove existing entries
+- PRESERVE frontmatter (--- blocks) exactly as-is
+- PRESERVE any <!-- obsidian-memory:auto-start/end --> blocks exactly as-is
+- Replace <!-- Agent: ... --> placeholder comments with actual content
+- For Features.md: add any new features to the table (Feature | Status | Module | Files | Description)
+- For Modules.md: fill in <!-- purpose --> placeholders and add module details
+- For Architecture.md: add system overview and key patterns if empty
+- For Conventions.md: document patterns, naming, gotchas, and testing patterns observed in the code
+- Keep content concise and factual — based only on what the diff and design doc show
+- If a doc already has good content for a section, leave it unchanged
+- Use wikilinks ([[PageName]]) for cross-references
+
+Return a JSON object where keys are filenames (e.g. "Features.md") and values are the COMPLETE updated file content (including frontmatter). Only include files that actually changed.
+
+Return ONLY valid JSON, no markdown fences.`;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.0-flash',
+    contents: prompt,
+    config: {
+      responseMimeType: 'application/json',
+    },
+  });
+
+  const text = response.text;
+  if (!text) throw new Error('Gemini docs response empty');
+
+  return JSON.parse(text) as Record<string, string>;
+}
+
+async function updateProjectDocs(
+  run: Run,
+  issue: Issue,
+  context: RunContext,
+  worktreePath: string,
+): Promise<void> {
+  const docsConfig = resolveDocsConfig(worktreePath);
+  if (!docsConfig) {
+    console.log(`[memory] Skipping docs update — no .obsidian-memory.json found`);
+    return;
+  }
+
+  const docsDir = join(docsConfig.vaultPath, 'Memory', 'Projects', docsConfig.project, 'Docs');
+  if (!existsSync(docsDir)) {
+    console.log(`[memory] Skipping docs update — docs dir not found: ${docsDir}`);
+    return;
+  }
+
+  const existingDocs = readExistingDocs(docsDir);
+  if (Object.keys(existingDocs).length === 0) {
+    console.log(`[memory] Skipping docs update — no existing doc files found`);
+    return;
+  }
+
+  const updatedDocs = await callGeminiForDocs(run, issue, context, existingDocs);
+
+  let updated = 0;
+  for (const [filename, content] of Object.entries(updatedDocs)) {
+    if (!DOC_FILES.includes(filename as typeof DOC_FILES[number])) continue;
+    const filePath = join(docsDir, filename);
+    writeFileSync(filePath, content, 'utf-8');
+    updated++;
+  }
+
+  if (updated > 0) {
+    console.log(`[memory] Updated ${updated} doc(s) for ${issue.key}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point
+// ---------------------------------------------------------------------------
+
 export async function documentRun(run: Run, issue: Issue, worktreePath: string): Promise<void> {
   if (!config.geminiApiKey) {
     console.log(`[memory] Skipping documentation — GEMINI_API_KEY not set`);
@@ -204,4 +354,11 @@ export async function documentRun(run: Run, issue: Issue, worktreePath: string):
 
   const summary = await callGemini(run, issue, context);
   await saveToObsidian(run, issue, summary);
+
+  // Update project feature docs with info from this run
+  try {
+    await updateProjectDocs(run, issue, context, worktreePath);
+  } catch (err) {
+    console.error(`[memory] Failed to update project docs for ${issue.key}:`, err);
+  }
 }

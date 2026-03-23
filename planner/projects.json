@@ -20,13 +20,6 @@
     "linearTeam": "FAU",
     "linearProfile": ""
   },
-  "better-context": {
-    "path": "/Users/enjat/Github/better-context",
-    "repo": "davis7dotsh/better-context",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
   "bill-splitter": {
     "path": "/Users/enjat/Github/bill-splitter",
     "repo": "",
@@ -41,13 +34,6 @@
     "linearTeam": "FAU",
     "linearProfile": ""
   },
-  "claude-code-rlm": {
-    "path": "/Users/enjat/Github/claude_code_RLM",
-    "repo": "Brainqub3/claude_code_RLM",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
   "claude-harness": {
     "path": "/Users/enjat/Github/claude-harness",
     "repo": "fauzanazz/claude-harness",
@@ -58,13 +44,6 @@
   "claude-orchestrator": {
     "path": "/Users/enjat/Github/claude-orchestrator",
     "repo": "fauzanazz/claude-orchestrator",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "claude-quickstarts": {
-    "path": "/Users/enjat/Github/claude-quickstarts",
-    "repo": "anthropics/claude-quickstarts",
     "baseBranch": "main",
     "linearTeam": "FAU",
     "linearProfile": ""
@@ -97,30 +76,9 @@
     "linearTeam": "FAU",
     "linearProfile": ""
   },
-  "finex-digital-image-processing": {
-    "path": "/Users/enjat/Github/finex-digital-image-processing",
-    "repo": "caernations/finex-digital-image-processing",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
   "fridge-roulette": {
     "path": "/Users/enjat/Github/lomba/fridge-roulette",
     "repo": "",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "gim-web": {
-    "path": "/Users/enjat/Github/GIM-Web",
-    "repo": "gim-itb/GIM-Web",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "graphiti": {
-    "path": "/Users/enjat/Github/graphiti",
-    "repo": "getzep/graphiti",
     "baseBranch": "main",
     "linearTeam": "FAU",
     "linearProfile": ""
@@ -167,20 +125,6 @@
     "linearTeam": "FAU",
     "linearProfile": ""
   },
-  "mdbms-integration": {
-    "path": "/Users/enjat/Github/mDBMS-Integration",
-    "repo": "InfedmixDBMS/mDBMS-Integration",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "norules-ggj": {
-    "path": "/Users/enjat/Github/NoRulesGGJ",
-    "repo": "Loxenary/NoRulesGGJ",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
   "obsidian-memory": {
     "path": "/Users/enjat/Github/obsidian-memory",
     "repo": "fauzanazz/obsidian-memory",
@@ -198,13 +142,6 @@
   "research-agentic": {
     "path": "/Users/enjat/Github/research-agentic",
     "repo": "",
-    "baseBranch": "main",
-    "linearTeam": "FAU",
-    "linearProfile": ""
-  },
-  "research-paper": {
-    "path": "/Users/enjat/Github/research-agentic/paper",
-    "repo": "IloveNooodles/ta-paper-latex-itb",
     "baseBranch": "main",
     "linearTeam": "FAU",
     "linearProfile": ""

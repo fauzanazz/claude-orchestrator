@@ -110,16 +110,31 @@ export function checkMergeReady(pr: GHPRView, repo: string): PRMergeStatus {
 // ---------------------------------------------------------------------------
 
 export function sendMacOSNotification(title: string, body: string, url: string): void {
-  Bun.spawn(
-    [
-      'osascript', '-e',
-      `display notification "${body.replace(/"/g, '\\"')}" with title "${title.replace(/"/g, '\\"')}"`,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' },
-  );
+  // Use terminal-notifier for clickable notifications that open the URL on click.
+  // Falls back to osascript if terminal-notifier is not installed.
+  const proc = Bun.spawnSync(['which', 'terminal-notifier'], { stdout: 'pipe', stderr: 'pipe' });
 
-  // Also open the URL so the user can click through
-  Bun.spawn(['open', url], { stdout: 'pipe', stderr: 'pipe' });
+  if (proc.exitCode === 0) {
+    Bun.spawn(
+      [
+        'terminal-notifier',
+        '-title', title,
+        '-message', body,
+        '-open', url,
+        '-sound', 'default',
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+  } else {
+    // Fallback: osascript notification (no click-to-open support)
+    Bun.spawn(
+      [
+        'osascript', '-e',
+        `display notification "${body.replace(/"/g, '\\"')}" with title "${title.replace(/"/g, '\\"')}"`,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

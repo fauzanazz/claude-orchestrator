@@ -29,6 +29,7 @@ import {
   vacuumDatabase,
   getDatabaseSize,
   hasActiveRunForIssue,
+  hasAnyRunForIssue,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -144,8 +145,8 @@ export async function pollLinear(): Promise<LinearIssue[]> {
   }
   const summaries = parseResult.data;
 
-  // Filter to "Ready for Agent" state
-  const ready = summaries.filter((s) => s.state === 'Ready for Agent');
+  // Filter to actionable states: "Ready for Agent" (new work) or "In Progress" (orphaned after restart)
+  const ready = summaries.filter((s) => s.state === 'Ready for Agent' || s.state === 'In Progress');
   if (ready.length === 0) return [];
 
   // Step 2: Read full details for each matching issue (has id + description)
@@ -168,6 +169,13 @@ export async function pollLinear(): Promise<LinearIssue[]> {
     const full = detailResult.data;
 
     if (full.description.includes('design:')) {
+      // "In Progress" issues are only re-picked if the orchestrator previously ran them
+      // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
+      if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
+        console.log(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
+        continue;
+      }
+
       const parent = full.parent as { id: string; identifier: string } | null | undefined;
       issues.push({
         id: full.id,
@@ -421,13 +429,11 @@ async function streamOutput(
         const text = decoder.decode(value, { stream: true });
         if (streamName === 'stderr') {
           bufferLog(runId, streamName, text);
-          process.stderr.write(text);
         } else {
           for (const line of text.split('\n').filter(Boolean)) {
             const readable = parseAgentEvent(line);
             if (readable) {
               bufferLog(runId, streamName, readable);
-              console.log(`[agent] ${readable}`);
             }
           }
         }
@@ -1167,7 +1173,12 @@ export async function pollReviews(): Promise<void> {
         // Enqueue revision
         const revisionRunId = enqueueRevision(run, run.pr_number!, issue);
 
-        // Mark review as processed
+        // Only mark review as processed if the run was actually inserted
+        // (INSERT OR IGNORE may skip if a queued run already exists for this issue)
+        if (!getRun(revisionRunId)) {
+          console.warn(`[reviewer] Revision run ${revisionRunId} was not inserted (duplicate?), skipping review ${reviewId}`);
+          continue;
+        }
         markReviewProcessed(reviewId, run.pr_number!, repo, revisionRunId);
 
         console.log(
@@ -1408,6 +1419,13 @@ export function startRunner(): void {
   // Database cleanup: periodic retention enforcement
   setInterval(runCleanup, config.cleanupIntervalMs);
   setTimeout(runCleanup, 30_000);
+
+  // Heartbeat: log orchestrator status every 60s
+  setInterval(() => {
+    console.log(
+      `[heartbeat] queue=${queue.length} running=${running}/${config.maxConcurrentAgents}`,
+    );
+  }, 60_000);
 
   console.log(
     `[runner] Running. Poll interval: ${config.pollIntervalMs}ms, ` +
