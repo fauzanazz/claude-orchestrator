@@ -317,8 +317,6 @@ export const DEFAULT_ALLOWED_TOOLS = [
   'Bash(tsc *)',
   'Bash(eslint *)',
   'Bash(prettier *)',
-  'Bash(pytest *)',
-  'Bash(python *)',
   'Bash(uv *)',
   'Bash(cargo *)',
   'Bash(go *)',
@@ -363,11 +361,11 @@ const DENIED_TOOLS = [
 ];
 
 export function buildAgentSettings(allowedTools?: string[]): object {
-  const allow = allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+  const allow = [...(allowedTools ?? DEFAULT_ALLOWED_TOOLS)];
   return {
     permissions: {
       allow,
-      deny: DENIED_TOOLS,
+      deny: [...DENIED_TOOLS],
     },
   };
 }

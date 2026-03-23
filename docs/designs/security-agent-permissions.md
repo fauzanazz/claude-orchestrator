@@ -56,8 +56,6 @@ const DEFAULT_ALLOWED_TOOLS = [
   'Bash(tsc *)',
   'Bash(eslint *)',
   'Bash(prettier *)',
-  'Bash(pytest *)',
-  'Bash(python *)',
   'Bash(uv *)',
   'Bash(cargo *)',
   'Bash(go *)',
