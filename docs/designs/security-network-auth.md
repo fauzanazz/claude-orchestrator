@@ -41,14 +41,19 @@ In `orchestrator/src/server.ts`, add a token initialization block before the Hon
 
 ```typescript
 import { randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 
 let apiToken: string | null = config.apiToken;
 if (!apiToken) {
   apiToken = randomBytes(32).toString('hex');
-  console.log(`[server] Generated ephemeral API token: ${apiToken.slice(0, 8)}…`);
+  const tokenPath = join(import.meta.dir, '..', '.api-token');
+  writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
+  console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
   console.log(`[server] Set API_TOKEN env var to persist across restarts`);
 }
 ```
+
+The token is written to `orchestrator/.api-token` with `0600` permissions (owner-only read/write) instead of being logged to stdout, preventing credential leakage through process manager logs while keeping the token accessible to authorized users.
 
 ### 4. Add auth middleware in `orchestrator/src/server.ts`
 

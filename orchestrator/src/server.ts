@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
 import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
@@ -101,7 +102,9 @@ const startTime = Date.now();
 let apiToken: string | null = config.apiToken;
 if (!apiToken) {
   apiToken = randomBytes(32).toString('hex');
-  console.log(`[server] Generated ephemeral API token: ${apiToken.slice(0, 8)}…`);
+  const tokenPath = join(import.meta.dir, '..', '.api-token');
+  writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
+  console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
   console.log(`[server] Set API_TOKEN env var to persist across restarts`);
 }
 
