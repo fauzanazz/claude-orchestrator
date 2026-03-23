@@ -1,6 +1,17 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach } from 'bun:test';
 import { db, insertRun, countTotalQueued, countQueuedForIssue, getLatestRunTimeForIssue } from './db.ts';
 import type { Run, RunStatus } from './types.ts';
+
+// Safety: abort if tests are running against the production database
+beforeAll(() => {
+  const filename = (db as any).filename;
+  if (filename && filename !== ':memory:' && filename !== '' && !filename.includes('test')) {
+    throw new Error(
+      `Tests are targeting the production DB (${filename}). ` +
+      `Run tests from orchestrator/ so bunfig.toml preload applies.`
+    );
+  }
+});
 
 function makeRun(overrides: Partial<Run> = {}): Omit<Run, 'created_at' | 'started_at' | 'completed_at'> {
   return {

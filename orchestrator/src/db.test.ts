@@ -1,5 +1,16 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach } from 'bun:test';
 import { db, insertRun, insertLog, getPRNumberByIssueKey, updateRunStatus, deleteOldLogs, deleteOldRuns, deleteOldProcessedReviews, deleteOldNotifiedPRs, getDatabaseSize } from './db.ts';
+
+// Safety: abort if tests are running against the production database
+beforeAll(() => {
+  const filename = (db as any).filename;
+  if (filename && filename !== ':memory:' && filename !== '' && !filename.includes('test')) {
+    throw new Error(
+      `Tests are targeting the production DB (${filename}). ` +
+      `Run tests from orchestrator/ so bunfig.toml preload applies.`
+    );
+  }
+});
 
 describe('getPRNumberByIssueKey', () => {
   test('returns PR number for a successful run with matching issue key', () => {
