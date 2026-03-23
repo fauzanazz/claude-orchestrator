@@ -1,4 +1,14 @@
 [
+  { "name": "add-zod-dependency", "description": "Add zod package to orchestrator dependencies", "passes": false },
+  { "name": "create-schemas-file", "description": "Create schemas.ts with Zod schemas for all CLI output boundaries", "passes": false },
+  { "name": "validate-linear-list-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for list output", "passes": false },
+  { "name": "validate-linear-read-output", "description": "Replace JSON.parse + as cast with Zod validation in pollLinear() for read output", "passes": false },
+  { "name": "validate-linear-reconstruct-output", "description": "Replace JSON.parse + as cast with Zod validation in reconstructIssueFromRun()", "passes": false },
+  { "name": "validate-gh-pr-list-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRList() in notify.ts", "passes": false },
+  { "name": "validate-gh-pr-view-output", "description": "Replace JSON.parse + as cast with Zod validation in ghPRView() in notify.ts", "passes": false },
+  { "name": "validate-gh-review-poll-output", "description": "Replace JSON.parse + as cast with Zod validation in pollReviews() in runner.ts", "passes": false },
+  { "name": "validate-gh-run-list-output", "description": "Replace JSON.parse + as cast with Zod validation in fetchCIFailureLogs() in runner.ts", "passes": false },
+  { "name": "schema-unit-tests", "description": "Unit tests for all schemas: valid input, missing required fields, wrong types, passthrough, defaults", "passes": false }
   { "name": "retention-config", "description": "Add logRetentionDays, runRetentionDays, cleanupIntervalMs config values", "passes": true },
   { "name": "delete-old-logs", "description": "Add deleteOldLogs function to db.ts", "passes": true },
   { "name": "delete-old-runs", "description": "Add deleteOldRuns function to db.ts (with cascading log deletion)", "passes": true },

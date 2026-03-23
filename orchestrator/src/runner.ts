@@ -43,6 +43,7 @@ import {
 } from './git.ts';
 import { initWorktree } from './init.ts';
 import { validateDesignPath, validateBranch, validateRepo } from './validate.ts';
+import { LinearIssueListSchema, LinearIssueDetailSchema, GHPRReviewPollSchema, GHRunListSchema } from './schemas.ts';
 import {
   buildInitializerPrompt,
   buildCodingPrompt,
@@ -129,12 +130,17 @@ async function runLineark(args: string[]): Promise<string> {
 export async function pollLinear(): Promise<LinearIssue[]> {
   // Step 1: List issues (lean output — has identifier + state but no id/description)
   const listOut = await runLineark(['issues', 'list', '--format', 'json']);
-  let summaries: Array<Record<string, unknown>>;
+  let listJson: unknown;
   try {
-    summaries = JSON.parse(listOut);
+    listJson = JSON.parse(listOut);
   } catch {
-    throw new Error(`Failed to parse lineark list output: ${listOut.slice(0, 200)}`);
+    throw new Error(`lineark list output is not valid JSON: ${listOut.slice(0, 200)}`);
   }
+  const parseResult = LinearIssueListSchema.safeParse(listJson);
+  if (!parseResult.success) {
+    throw new Error(`lineark list output validation failed: ${parseResult.error.message}`);
+  }
+  const summaries = parseResult.data;
 
   // Filter to "Ready for Agent" state
   const ready = summaries.filter((s) => s.state === 'Ready for Agent');
@@ -143,26 +149,29 @@ export async function pollLinear(): Promise<LinearIssue[]> {
   // Step 2: Read full details for each matching issue (has id + description)
   const issues: LinearIssue[] = [];
   for (const summary of ready) {
-    const identifier = summary.identifier as string;
+    const identifier = summary.identifier;
     const readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
-    let full: Record<string, unknown>;
+    let detailJson: unknown;
     try {
-      full = JSON.parse(readOut);
+      detailJson = JSON.parse(readOut);
     } catch {
-      console.warn(`[runner] Failed to parse lineark read for ${identifier}`);
+      console.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
       continue;
     }
+    const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
+    if (!detailResult.success) {
+      console.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
+      continue;
+    }
+    const full = detailResult.data;
 
-    if (
-      typeof full.description === 'string' &&
-      full.description.includes('design:')
-    ) {
+    if (full.description.includes('design:')) {
       const parent = full.parent as { id: string; identifier: string } | null | undefined;
       issues.push({
-        id: full.id as string,
-        identifier: full.identifier as string,
-        title: full.title as string,
-        description: full.description as string,
+        id: full.id,
+        identifier: full.identifier,
+        title: full.title,
+        description: full.description,
         parent: parent ?? undefined,
       });
     }
@@ -264,14 +273,19 @@ export function resolveProject(
 export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
   const readOut = await runLineark(['issues', 'read', run.issue_key, '--format', 'json']);
 
-  let linearIssue: Record<string, unknown>;
+  let detailJson: unknown;
   try {
-    linearIssue = JSON.parse(readOut);
+    detailJson = JSON.parse(readOut);
   } catch {
-    throw new Error(`Failed to parse Linear issue for ${run.issue_key}`);
+    throw new Error(`lineark read for ${run.issue_key} returned invalid JSON`);
   }
+  const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
+  if (!detailResult.success) {
+    throw new Error(`Failed to validate Linear issue for ${run.issue_key}: ${detailResult.error.message}`);
+  }
+  const linearIssue = detailResult.data;
 
-  const meta = parseIssueMetadata((linearIssue.description as string) ?? '');
+  const meta = parseIssueMetadata(linearIssue.description);
   if (!meta) {
     throw new Error(`Could not parse issue metadata from ${run.issue_key} description`);
   }
@@ -284,10 +298,10 @@ export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
   const parent = linearIssue.parent as { id: string; identifier: string } | null | undefined;
 
   return {
-    id: linearIssue.id as string,
+    id: linearIssue.id,
     key: run.issue_key,
     title: run.issue_title,
-    description: linearIssue.description as string,
+    description: linearIssue.description,
     designPath: meta.designPath,
     branch: meta.branch,
     repo: meta.repo,
@@ -446,12 +460,15 @@ async function fetchCIFailureLogs(repo: string, branch: string): Promise<string>
 
   if (listExit !== 0) return 'Could not fetch CI run list.';
 
-  let runs: Array<{ databaseId: number; name: string }>;
+  let listJson: unknown;
   try {
-    runs = JSON.parse(listOut);
+    listJson = JSON.parse(listOut);
   } catch {
-    return 'Could not parse CI run list.';
+    return 'Could not parse CI run list (invalid JSON).';
   }
+  const listResult = GHRunListSchema.safeParse(listJson);
+  if (!listResult.success) return 'Could not parse CI run list.';
+  const runs = listResult.data;
 
   const firstRun = runs[0];
   if (!firstRun) return 'No failed CI runs found.';
@@ -1072,23 +1089,26 @@ export async function pollReviews(): Promise<void> {
 
       if (ghExit !== 0) continue;
 
-      let prData: { state?: string; reviews?: Array<Record<string, unknown>> };
+      let pollJson: unknown;
       try {
-        prData = JSON.parse(ghOut);
+        pollJson = JSON.parse(ghOut);
       } catch {
         continue;
       }
+      const pollResult = GHPRReviewPollSchema.safeParse(pollJson);
+      if (!pollResult.success) continue;
+      const prData = pollResult.data;
 
       // Stop watching closed/merged PRs
       if (prData.state !== 'OPEN') continue;
 
-      for (const review of prData.reviews ?? []) {
-        const reviewId = review.id as string | undefined;
+      for (const review of prData.reviews) {
+        const reviewId = review.id;
         if (!reviewId) continue;
 
-        const state = ((review.state as string) ?? '').toLowerCase();
-        const body = ((review.body as string) ?? '').trim();
-        const reviewAuthor = (review.author as Record<string, unknown>)?.login as string | undefined;
+        const state = review.state.toLowerCase();
+        const body = review.body.trim();
+        const reviewAuthor = review.author?.login;
 
         // Skip self-reviews to prevent loops
         if (reviewAuthor === config.githubUsername) continue;

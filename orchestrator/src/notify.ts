@@ -1,42 +1,17 @@
 import { config } from './config.ts';
 import { isPRNotified, markPRNotified, clearPRNotified } from './db.ts';
 import { loadProjects } from './runner.ts';
+import { GHPRListSchema, GHPRViewSchema } from './schemas.ts';
 import type { PRMergeStatus } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // GitHub PR status checking
 // ---------------------------------------------------------------------------
 
-interface GHPRListItem {
-  number: number;
-}
+import type { z } from 'zod';
 
-export interface GHPRView {
-  number: number;
-  title: string;
-  url: string;
-  headRefName: string;
-  reviewDecision: string;
-  mergeable: string; // 'MERGEABLE', 'CONFLICTING', or 'UNKNOWN'
-  statusCheckRollup: Array<{
-    name: string;
-    status: string;
-    conclusion: string;
-  }>;
-  commits: Array<{
-    committedDate: string;
-  }>;
-  reviews: Array<{
-    submittedAt: string;
-    state: string;
-    author: { login: string };
-    body: string;
-  }>;
-  comments: Array<{
-    createdAt: string;
-    author: { login: string };
-  }>;
-}
+type GHPRListItem = z.infer<typeof GHPRListSchema>[number];
+export type GHPRView = z.infer<typeof GHPRViewSchema>;
 
 async function ghPRList(repo: string): Promise<GHPRListItem[]> {
   const proc = Bun.spawn(
@@ -51,7 +26,12 @@ async function ghPRList(repo: string): Promise<GHPRListItem[]> {
   if (exitCode !== 0) return [];
 
   try {
-    return JSON.parse(out) as GHPRListItem[];
+    const parseResult = GHPRListSchema.safeParse(JSON.parse(out));
+    if (!parseResult.success) {
+      console.warn(`[notify] gh pr list validation failed for ${repo}: ${parseResult.error.message}`);
+      return [];
+    }
+    return parseResult.data;
   } catch {
     return [];
   }
@@ -74,7 +54,12 @@ async function ghPRView(repo: string, prNumber: number): Promise<GHPRView | null
   if (exitCode !== 0) return null;
 
   try {
-    return JSON.parse(out) as GHPRView;
+    const parseResult = GHPRViewSchema.safeParse(JSON.parse(out));
+    if (!parseResult.success) {
+      console.warn(`[notify] gh pr view validation failed for ${repo}#${prNumber}: ${parseResult.error.message}`);
+      return null;
+    }
+    return parseResult.data;
   } catch {
     return null;
   }
