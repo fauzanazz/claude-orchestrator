@@ -4,174 +4,199 @@
     "repo": "fauzanazz/artful-diary",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Artful Diary"
   },
   "auto-claude": {
     "path": "/Users/enjat/Github/keloia/auto-claude",
     "repo": "Keloia/auto-claude",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Auto Claude"
   },
   "autonomous-coding": {
     "path": "/Users/enjat/Github/autonomous-coding",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Autonomous Coding"
   },
   "bill-splitter": {
     "path": "/Users/enjat/Github/bill-splitter",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Bill Splitter"
   },
   "bismillah-best-game": {
     "path": "/Users/enjat/Github/bismillah_best_game",
     "repo": "fauzanazz/bismillah_best_game",
     "baseBranch": "dev",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Bismillah Best Game"
   },
   "claude-harness": {
     "path": "/Users/enjat/Github/claude-harness",
     "repo": "fauzanazz/claude-harness",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Claude Harness"
   },
   "claude-orchestrator": {
     "path": "/Users/enjat/Github/claude-orchestrator",
     "repo": "fauzanazz/claude-orchestrator",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Claude Orchestrator"
   },
   "claude-skills": {
     "path": "/Users/enjat/Github/claude-skills",
     "repo": "fauzanazz/claude-skills",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Claude Skills"
   },
   "data-mining-t1-2025": {
     "path": "/Users/enjat/Github/data-mining-t1-2025",
     "repo": "fauzanazz/data-mining-t1-2025",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Data Mining T1 2025"
   },
   "data-mining-t2-2025": {
     "path": "/Users/enjat/Github/data-mining-t2-2025",
     "repo": "fauzanazz/data-mining-t2-2025",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Data Mining T2 2025"
   },
   "dingdong-rag": {
     "path": "/Users/enjat/Github/dingdong-rag",
     "repo": "fauzanazz/AgenticStorageRAG",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "DingDong RAG"
   },
   "fridge-roulette": {
     "path": "/Users/enjat/Github/lomba/fridge-roulette",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Fridge Roulette"
   },
   "indonesian-hate-speech-detection": {
     "path": "/Users/enjat/Github/indonesian-hate-speech-detection",
     "repo": "fauzanazz/indonesian-hate-speech-detection",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Indonesian Hate Speech Detection"
   },
   "izin-ai": {
     "path": "/Users/enjat/Github/lomba/izin-ai",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Izin AI"
   },
   "keloia": {
     "path": "/Users/enjat/Github/keloia/keloia",
     "repo": "Keloia/keloia",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Keloia"
   },
   "keloia-docs": {
     "path": "/Users/enjat/Github/keloia/keloia-docs",
     "repo": "Keloia/KELOIA-DOCS",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Keloia Docs"
   },
   "keloia-internal-tools": {
     "path": "/Users/enjat/Github/keloia/internal-tools",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Keloia Internal Tools"
   },
   "lightrag-indonesia": {
     "path": "/Users/enjat/Github/research-agentic/LightRAG",
     "repo": "fauzanazz/LightRAG-Indonesia",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "LightRAG Indonesia"
   },
   "obsidian-memory": {
     "path": "/Users/enjat/Github/obsidian-memory",
     "repo": "fauzanazz/obsidian-memory",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Obsidian Memory"
   },
   "rekening-bersama": {
     "path": "/Users/enjat/Github/RekeningBersama",
     "repo": "fauzanazz/RekeningBersama",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Rekening Bersama"
   },
   "research-agentic": {
     "path": "/Users/enjat/Github/research-agentic",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Research Agentic"
   },
   "rumasa-web": {
     "path": "/Users/enjat/Github/rumasa-web",
     "repo": "fauzanazz/rumasa-web",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Rumasa Web"
   },
   "selamat-kepada-tim-gameseed": {
     "path": "/Users/enjat/Github/SelamatKepadaTim-Gameseed",
     "repo": "fauzanazz/SelamatKepadaTim-Gameseed",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Selamat Kepada Tim Gameseed"
   },
   "tab-bankruptcy": {
     "path": "/Users/enjat/Github/lomba/tab-bankruptcy",
     "repo": "Keloia/tabmind",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Tab Bankruptcy"
   },
   "text-tone-translator": {
     "path": "/Users/enjat/Github/lomba/text-tone-translator",
     "repo": "",
     "baseBranch": "main",
     "linearTeam": "FAU",
-    "linearProfile": ""
+    "linearProfile": "",
+    "linearProject": "Text Tone Translator"
   }
 }
