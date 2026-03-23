@@ -16,20 +16,32 @@ if (missing.length > 0) {
   );
 }
 
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`Invalid numeric value for ${name}: "${raw}"`);
+  }
+  return parseInt(raw, 10);
+}
+
 export const config = {
   projectsConfigPath: required.PROJECTS_CONFIG_PATH as string,
   githubWebhookSecret: required.GITHUB_WEBHOOK_SECRET as string,
   githubUsername: required.GITHUB_USERNAME as string,
 
   claudeCodePath: process.env.CLAUDE_CODE_PATH ?? 'claude',
-  maxConcurrentAgents: parseInt(process.env.MAX_CONCURRENT_AGENTS ?? '2', 10),
-  agentTimeoutMs: parseInt(process.env.AGENT_TIMEOUT_MS ?? '1800000', 10),
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS ?? '30000', 10),
-  logFlushIntervalMs: parseInt(process.env.LOG_FLUSH_INTERVAL_MS ?? '5000', 10),
-  reviewPollIntervalMs: parseInt(process.env.REVIEW_POLL_INTERVAL_MS ?? '120000', 10),
-  reviewMinBodyLength: parseInt(process.env.REVIEW_MIN_BODY_LENGTH ?? '10', 10),
-  reviewWatchMaxAgeDays: parseInt(process.env.REVIEW_WATCH_MAX_AGE_DAYS ?? '7', 10),
-  port: parseInt(process.env.PORT ?? '7400', 10),
+  maxConcurrentAgents: parseIntEnv('MAX_CONCURRENT_AGENTS', 2),
+  agentTimeoutMs: parseIntEnv('AGENT_TIMEOUT_MS', 7200000),
+  maxSessionIterations: parseIntEnv('MAX_SESSION_ITERATIONS', 10),
+  sessionTimeoutMs: parseIntEnv('SESSION_TIMEOUT_MS', 1800000),
+  autoContinueDelayMs: parseIntEnv('AUTO_CONTINUE_DELAY_MS', 3000),
+  pollIntervalMs: parseIntEnv('POLL_INTERVAL_MS', 30000),
+  logFlushIntervalMs: parseIntEnv('LOG_FLUSH_INTERVAL_MS', 5000),
+  reviewPollIntervalMs: parseIntEnv('REVIEW_POLL_INTERVAL_MS', 120000),
+  reviewMinBodyLength: parseIntEnv('REVIEW_MIN_BODY_LENGTH', 10),
+  reviewWatchMaxAgeDays: parseIntEnv('REVIEW_WATCH_MAX_AGE_DAYS', 7),
+  port: parseIntEnv('PORT', 7400),
 
   tunnelName: process.env.TUNNEL_NAME,
   tunnelHostname: process.env.TUNNEL_HOSTNAME,

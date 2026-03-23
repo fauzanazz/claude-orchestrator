@@ -83,6 +83,16 @@ db.run(`
   );
 `);
 
+// Migration: add iterations column
+try {
+  db.run(`ALTER TABLE runs ADD COLUMN iterations INTEGER NOT NULL DEFAULT 0`);
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (!msg.includes('duplicate column')) {
+    throw err;
+  }
+}
+
 // Prepared statements
 const stmtInsertRun = db.prepare<void, [
   string, string, string, string, string, string, string, string, number, number, string | null, number, number | null
@@ -223,6 +233,14 @@ export function insertLog(runId: string, stream: string, content: string): void 
 
 export function getLogsForRun(runId: string): LogEntry[] {
   return stmtGetLogsForRun.all(runId);
+}
+
+const stmtUpdateRunIterations = db.prepare<void, [number, string]>(
+  `UPDATE runs SET iterations = ? WHERE id = ?`
+);
+
+export function updateRunIterations(id: string, iterations: number): void {
+  stmtUpdateRunIterations.run(iterations, id);
 }
 
 export function markStaleRunsFailed(): void {

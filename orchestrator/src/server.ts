@@ -152,6 +152,7 @@ app.post('/api/runs/:id/retry', async (c) => {
     fix_attempt: original.fix_attempt ?? 0,
     pr_number: original.pr_number,
     agent_pid: null,
+    iterations: 0,
     error_summary: null,
     pr_url: null,
   };

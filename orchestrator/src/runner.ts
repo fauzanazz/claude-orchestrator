@@ -6,6 +6,7 @@ import {
   insertRun,
   insertLog,
   updateRunStatus,
+  updateRunIterations,
   getRun,
   getRunByBranch,
   getRunsByStatus,
@@ -22,6 +23,8 @@ import {
 import {
   ensureProjectLocal,
   setupWorktree,
+  setupAgentState,
+  hasLocalCommits,
   writeAgentSettings,
   cleanupWorktree,
   pushFromWorktree,
@@ -31,6 +34,13 @@ import {
   forcePushFromWorktree,
 } from './git.ts';
 import { initWorktree } from './init.ts';
+import {
+  buildInitializerPrompt,
+  buildCodingPrompt,
+  readFeatureList,
+  isAllFeaturesDone,
+  type SessionPromptContext,
+} from './prompts.ts';
 import { pollMergeReadiness, fetchAllPRStatuses, checkFixNeeded, sendFixExhaustedNotification } from './notify.ts';
 import type {
   Run,
@@ -493,47 +503,39 @@ export async function executeRun(
   let projectPath: string | null = null;
 
   try {
-    // Update Linear and DB: In Progress
     if (!run.is_fix) {
       updateLinearStatus(issue.key, 'In Progress');
     }
     updateRunStatus(runId, 'running', { started_at: new Date().toISOString() });
 
-    // Broadcast the running transition to SSE clients
     const runningRun = getRun(runId);
     if (runningRun) broadcastSSE({ type: 'run_update', run: runningRun });
 
     bufferLog(runId, 'system', `[runner] Starting run ${runId} for ${issue.key}`);
 
-    // Ensure project is cloned locally
     projectPath = await ensureProjectLocal(project, projectKey);
     bufferLog(runId, 'system', `[runner] Project path: ${projectPath}`);
 
-    // Setup worktree
     const slug = ulid().slice(-6).toLowerCase();
     worktreePath = await setupWorktree(projectPath, issue.branch, issue.key, slug);
     bufferLog(runId, 'system', `[runner] Worktree: ${worktreePath}`);
 
-    // Write agent settings (permissions)
     await writeAgentSettings(worktreePath);
-
-    // Init worktree (install dependencies, etc.)
     await initWorktree(worktreePath, project.init, runId, bufferLog);
 
-    // Build prompt
-    let prompt: string;
+    await setupAgentState(worktreePath);
+
+    let completedSessions = 0;
 
     if (run.is_fix && run.fix_type) {
-      // Fix run — use fix-specific prompt
+      // ─── Fix run: single-session execution ─────────────────────────────
       let errorContext: string;
       if (run.fix_type === 'ci_failure') {
         errorContext = await fetchCIFailureLogs(issue.repo, issue.branch);
       } else {
-        // Perform the rebase in the worktree so the agent sees conflict markers
         bufferLog(runId, 'system', `[runner] Rebasing onto ${issue.baseBranch} to surface conflict markers`);
         const rebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
         if (rebaseResult.success) {
-          // Rebase succeeded cleanly — just force push and we're done
           bufferLog(runId, 'system', `[runner] Rebase succeeded cleanly, force-pushing`);
           await forcePushFromWorktree(worktreePath, issue.branch);
           updateRunStatus(runId, 'success', { completed_at: new Date().toISOString(), pr_url: `https://github.com/${issue.repo}/pull/${run.pr_number}`, pr_number: run.pr_number });
@@ -541,29 +543,57 @@ export async function executeRun(
           bufferLog(runId, 'system', `[runner] Conflict resolved via clean rebase`);
           return;
         }
-        // Rebase failed — conflict markers are now in the worktree for the agent
         errorContext = `Automatic rebase onto ${issue.baseBranch} failed. Conflict markers are present in the working tree.\n\n${rebaseResult.conflictOutput ?? ''}`;
       }
-      prompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt);
+
+      const fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt);
+      bufferLog(runId, 'system', `[runner] Spawning claude agent for fix`);
+
+      const agentProc = Bun.spawn(
+        [config.claudeCodePath, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', fixPrompt],
+        { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
+      );
+      updateRunStatus(runId, 'running', { agent_pid: agentProc.pid });
+
+      const pidRun = getRun(runId);
+      if (pidRun) broadcastSSE({ type: 'run_update', run: pidRun });
+
+      const timeoutPromise = new Promise<'timeout'>((resolve) =>
+        setTimeout(() => resolve('timeout'), config.agentTimeoutMs),
+      );
+      const completion = Promise.all([
+        streamOutput(agentProc.stdout, runId, 'stdout'),
+        streamOutput(agentProc.stderr, runId, 'stderr'),
+        agentProc.exited,
+      ]).then(() => 'done' as const);
+
+      const result = await Promise.race([completion, timeoutPromise]);
+
+      if (result === 'timeout') {
+        bufferLog(runId, 'system', `[runner] Agent timed out after ${config.agentTimeoutMs}ms — killing`);
+        agentProc.kill();
+        await completion;
+        updateRunStatus(runId, 'failed', {
+          error_summary: `Agent timed out after ${config.agentTimeoutMs}ms`,
+          completed_at: new Date().toISOString(),
+        });
+        commentOnIssue(issue.key, `Fix agent timed out after ${config.agentTimeoutMs / 1000}s.`);
+        return;
+      }
+
+      completedSessions = 1;
     } else {
+      // ─── Normal/revision run: multi-session loop ───────────────────────
       let reviewFeedback: string | undefined;
       let prInstructions = '';
 
       if (run.pr_number) {
-        // Revision: fetch PR review comments via gh CLI
         bufferLog(runId, 'system', `[runner] Fetching review comments for PR #${run.pr_number}`);
         const ghProc = Bun.spawn(
-          [
-            'gh', 'pr', 'view', String(run.pr_number),
-            '--repo', issue.repo,
-            '--json', 'reviews,comments',
-          ],
+          ['gh', 'pr', 'view', String(run.pr_number), '--repo', issue.repo, '--json', 'reviews,comments'],
           { stdout: 'pipe', stderr: 'pipe' },
         );
-        const [ghOut] = await Promise.all([
-          new Response(ghProc.stdout).text(),
-          ghProc.exited,
-        ]);
+        const [ghOut] = await Promise.all([new Response(ghProc.stdout).text(), ghProc.exited]);
         reviewFeedback = ghOut.trim() || undefined;
         prInstructions =
           `\n\n## PR Instructions\n\n` +
@@ -572,75 +602,91 @@ export async function executeRun(
           `Use \`gh pr review\` to understand reviewer feedback and address all requested changes.`;
       }
 
-      prompt = (await buildAgentPrompt(issue, worktreePath, reviewFeedback)) + prInstructions;
-    }
+      const basePrompt = (await buildAgentPrompt(issue, worktreePath, reviewFeedback)) + prInstructions;
+      const ctx: SessionPromptContext = { basePrompt, issueKey: issue.key };
 
-    bufferLog(runId, 'system', `[runner] Spawning claude agent`);
+      const runStartTime = Date.now();
+      let isFirstRun = true;
 
-    // Spawn claude
-    const agentProc = Bun.spawn(
-      [config.claudeCodePath, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', prompt],
-      {
-        cwd: worktreePath,
-        stdout: 'pipe',
-        stderr: 'pipe',
-      },
-    );
+      for (let iteration = 0; iteration < config.maxSessionIterations; iteration++) {
+        const elapsed = Date.now() - runStartTime;
+        if (elapsed > config.agentTimeoutMs) {
+          bufferLog(runId, 'system', `[runner] Total run timeout (${config.agentTimeoutMs}ms) reached after ${completedSessions} session(s)`);
+          break;
+        }
 
-    // Update DB with agent PID
-    updateRunStatus(runId, 'running', { agent_pid: agentProc.pid });
+        const prompt = isFirstRun
+          ? buildInitializerPrompt(ctx)
+          : buildCodingPrompt(ctx);
+        isFirstRun = false;
 
-    // Broadcast PID update
-    const pidRun = getRun(runId);
-    if (pidRun) broadcastSSE({ type: 'run_update', run: pidRun });
+        bufferLog(runId, 'system', `[runner] Starting session ${iteration + 1}/${config.maxSessionIterations}`);
 
-    // Race: stream output vs timeout
-    const timeoutPromise = new Promise<'timeout'>((resolve) =>
-      setTimeout(() => resolve('timeout'), config.agentTimeoutMs),
-    );
+        const agentProc = Bun.spawn(
+          [config.claudeCodePath, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', prompt],
+          { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
+        );
 
-    const completionPromise = Promise.all([
-      streamOutput(agentProc.stdout, runId, 'stdout'),
-      streamOutput(agentProc.stderr, runId, 'stderr'),
-      agentProc.exited,
-    ]).then(() => 'done' as const);
+        updateRunStatus(runId, 'running', { agent_pid: agentProc.pid });
 
-    const result = await Promise.race([completionPromise, timeoutPromise]);
+        const sessionTimeout = new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), config.sessionTimeoutMs),
+        );
 
-    if (result === 'timeout') {
-      bufferLog(runId, 'system', `[runner] Agent timed out after ${config.agentTimeoutMs}ms — killing`);
-      agentProc.kill();
-      updateRunStatus(runId, 'failed', {
-        error_summary: `Agent timed out after ${config.agentTimeoutMs}ms`,
-        completed_at: new Date().toISOString(),
-      });
-      if (!run.is_fix) {
-        updateLinearStatus(issue.key, 'Failed');
+        const completion = Promise.all([
+          streamOutput(agentProc.stdout, runId, 'stdout'),
+          streamOutput(agentProc.stderr, runId, 'stderr'),
+          agentProc.exited,
+        ]).then(() => 'done' as const);
+
+        const result = await Promise.race([completion, sessionTimeout]);
+
+        if (result === 'timeout') {
+          bufferLog(runId, 'system', `[runner] Session ${iteration + 1} timed out after ${config.sessionTimeoutMs}ms — killing`);
+          agentProc.kill();
+          await completion;
+        } else {
+          const exitCode = agentProc.exitCode ?? 0;
+          bufferLog(runId, 'system', `[runner] Session ${iteration + 1} exited with code ${exitCode}`);
+        }
+
+        completedSessions++;
+        updateRunIterations(runId, completedSessions);
+
+        broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: false });
+
+        const features = await readFeatureList(worktreePath!);
+        if (isAllFeaturesDone(features)) {
+          bufferLog(runId, 'system', `[runner] All features complete after ${completedSessions} session(s)`);
+          broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: true });
+          break;
+        }
+
+        if (iteration < config.maxSessionIterations - 1) {
+          bufferLog(runId, 'system', `[runner] Waiting ${config.autoContinueDelayMs}ms before next session`);
+          await new Promise((resolve) => setTimeout(resolve, config.autoContinueDelayMs));
+        }
       }
-      commentOnIssue(issue.key, `Agent timed out after ${config.agentTimeoutMs / 1000}s.`);
-      return;
+
+      bufferLog(runId, 'system', `[runner] Loop finished after ${completedSessions} session(s)`);
     }
 
-    const exitCode = agentProc.exitCode ?? 0;
-    bufferLog(runId, 'system', `[runner] Agent exited with code ${exitCode}`);
+    const hasCommits = await hasLocalCommits(worktreePath!);
 
-    if (exitCode !== 0) {
-      throw new Error(`Claude agent exited with code ${exitCode}`);
+    if (!hasCommits) {
+      throw new Error(`No commits made after ${completedSessions} session(s) — nothing to push`);
     }
 
-    // Push commits (force-push for merge conflict fixes since rebase rewrites history)
     if (run.is_fix && run.fix_type === 'merge_conflict') {
       bufferLog(runId, 'system', `[runner] Force-pushing branch ${issue.branch} (post-rebase)`);
-      await forcePushFromWorktree(worktreePath, issue.branch);
+      await forcePushFromWorktree(worktreePath!, issue.branch);
     } else {
       bufferLog(runId, 'system', `[runner] Pushing branch ${issue.branch}`);
-      await pushFromWorktree(worktreePath, issue.branch);
+      await pushFromWorktree(worktreePath!, issue.branch);
     }
 
-    // Create or update PR
     let prUrl: string;
     if (run.pr_number) {
-      // Revision — PR already exists, construct URL
       prUrl = `https://github.com/${issue.repo}/pull/${run.pr_number}`;
       bufferLog(runId, 'system', `[runner] Updated existing PR: ${prUrl}`);
     } else {
@@ -655,11 +701,9 @@ export async function executeRun(
       bufferLog(runId, 'system', `[runner] Created PR: ${prUrl}`);
     }
 
-    // Extract PR number from URL for review polling
     const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
     const prNum = prNumberMatch?.[1] ? parseInt(prNumberMatch[1], 10) : null;
 
-    // Update DB and Linear to success
     updateRunStatus(runId, 'success', {
       pr_url: prUrl,
       pr_number: prNum,
@@ -673,16 +717,14 @@ export async function executeRun(
       commentOnIssue(issue.key, `PR ready for review: ${prUrl}`);
     }
 
-    bufferLog(runId, 'system', `[runner] Run ${runId} completed successfully`);
+    bufferLog(runId, 'system', `[runner] Run ${runId} completed successfully after ${completedSessions} session(s)`);
 
-    // Broadcast run update
     const updatedRun = getRun(runId);
     if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
 
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     bufferLog(runId, 'system', `[runner] Run ${runId} failed: ${errorMessage}`);
-
     updateRunStatus(runId, 'failed', {
       error_summary: errorMessage.slice(0, 500),
       completed_at: new Date().toISOString(),
@@ -699,8 +741,6 @@ export async function executeRun(
 
   } finally {
     flushLogs(runId);
-
-    // Best-effort worktree cleanup
     if (projectPath && worktreePath) {
       cleanupWorktree(projectPath, worktreePath).catch(() => {});
     }
@@ -742,6 +782,7 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
     fix_attempt: 0,
     pr_number: prNumber,
     agent_pid: null,
+    iterations: 0,
     error_summary: null,
     pr_url: null,
   };
@@ -780,6 +821,7 @@ export function enqueueFix(
     fix_attempt: attempt,
     pr_number: prNumber,
     agent_pid: null,
+    iterations: 0,
     error_summary: null,
     pr_url: null,
   };
@@ -1094,6 +1136,7 @@ export function startRunner(): void {
           fix_attempt: 0,
           pr_number: null,
           agent_pid: null,
+          iterations: 0,
           error_summary: null,
           pr_url: null,
         };

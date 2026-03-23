@@ -59,6 +59,7 @@ export interface Run {
   fix_attempt: number;           // which attempt (1, 2, 3...)
   pr_number: number | null;
   agent_pid: number | null;
+  iterations: number;
   error_summary: string | null;
   pr_url: string | null;
   created_at: string;
@@ -69,7 +70,8 @@ export interface Run {
 // SSE event types
 export type SSEEvent =
   | { type: 'run_update'; run: Run }
-  | { type: 'log'; runId: string; stream: string; content: string };
+  | { type: 'log'; runId: string; stream: string; content: string }
+  | { type: 'iteration'; runId: string; current: number; max: number; allDone: boolean };
 
 // PR merge-readiness status (from gh CLI)
 export interface PRMergeStatus {
