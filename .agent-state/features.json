@@ -1,0 +1,14 @@
+[
+  { "name": "analytics-overview-query", "description": "Analytics overview query: total runs, success rate, avg duration, avg sessions, retry rate", "passes": true },
+  { "name": "project-stats-query", "description": "Per-project breakdown query: same metrics grouped by project", "passes": true },
+  { "name": "daily-throughput-query", "description": "Daily throughput query: runs per day over configurable period", "passes": true },
+  { "name": "failure-breakdown-query", "description": "Failure breakdown query: top error categories with counts", "passes": true },
+  { "name": "api-analytics-overview", "description": "GET /api/analytics/overview endpoint with ?days=N param", "passes": true },
+  { "name": "api-analytics-projects", "description": "GET /api/analytics/projects endpoint with ?days=N param", "passes": true },
+  { "name": "api-analytics-throughput", "description": "GET /api/analytics/throughput endpoint with ?days=N param", "passes": true },
+  { "name": "api-analytics-failures", "description": "GET /api/analytics/failures endpoint with ?days=N and ?project params", "passes": true },
+  { "name": "dashboard-stat-cards", "description": "Dashboard analytics section with stat cards (total, success rate, duration, sessions, retry rate)", "passes": true },
+  { "name": "dashboard-throughput-chart", "description": "Dashboard throughput bar chart (daily runs over 30d)", "passes": true },
+  { "name": "dashboard-project-breakdown", "description": "Dashboard per-project breakdown with color-coded bars", "passes": true },
+  { "name": "analytics-tests", "description": "Tests for all analytics query functions", "passes": true }
+]

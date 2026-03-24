@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, beforeEach } from 'bun:test';
-import { db, insertRun, insertLog, getPRNumberByIssueKey, updateRunStatus, deleteOldLogs, deleteOldRuns, deleteOldProcessedReviews, deleteOldNotifiedPRs, getDatabaseSize } from './db.ts';
+import { db, insertRun, insertLog, getPRNumberByIssueKey, updateRunStatus, deleteOldLogs, deleteOldRuns, deleteOldProcessedReviews, deleteOldNotifiedPRs, getDatabaseSize, getAnalyticsOverview, getProjectStats, getDailyThroughput, getFailureBreakdown } from './db.ts';
 
 // Safety: abort if tests are running against the production database
 beforeAll(() => {
@@ -276,6 +276,170 @@ describe('database retention & cleanup', () => {
     test('returns a positive number', () => {
       const size = getDatabaseSize();
       expect(size).toBeGreaterThan(0);
+    });
+  });
+});
+
+// Helper to insert an analytics test run with direct SQL for full control
+function createAnalyticsRun(opts: {
+  id: string;
+  project: string;
+  status: string;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  iterations?: number;
+  retry_attempt?: number;
+  error_summary?: string | null;
+}) {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare(`
+    INSERT INTO runs (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_attempt, retry_attempt, iterations, error_summary, created_at, started_at, completed_at)
+    VALUES (?, ?, 'issue-a', 'A-1', 'Test', 'branch-a', '/tmp/wt', ?, 0, 0, 0, ?, ?, ?, ?, ?, ?)
+  `).run(
+    opts.id,
+    opts.project,
+    opts.status,
+    opts.retry_attempt ?? 0,
+    opts.iterations ?? 0,
+    opts.error_summary ?? null,
+    opts.created_at ?? now,
+    opts.started_at ?? null,
+    opts.completed_at ?? null,
+  );
+}
+
+describe('analytics', () => {
+  beforeEach(() => {
+    cleanTables();
+  });
+
+  describe('getAnalyticsOverview', () => {
+    test('returns zeroes when no runs exist', () => {
+      const overview = getAnalyticsOverview(30);
+      expect(overview.total_runs).toBe(0);
+      expect(overview.success_rate).toBe(0);
+      expect(overview.avg_duration_seconds).toBe(0);
+      expect(overview.retry_rate).toBe(0);
+    });
+
+    test('computes correct counts and rates', () => {
+      createAnalyticsRun({ id: 'a1', project: 'proj-a', status: 'success', started_at: '2026-03-25 00:00:00', completed_at: '2026-03-25 00:10:00' });
+      createAnalyticsRun({ id: 'a2', project: 'proj-a', status: 'success' });
+      createAnalyticsRun({ id: 'a3', project: 'proj-a', status: 'failed', error_summary: 'timed out' });
+      createAnalyticsRun({ id: 'a4', project: 'proj-b', status: 'failed', retry_attempt: 1, error_summary: 'No commits produced' });
+
+      const overview = getAnalyticsOverview(30);
+      expect(overview.total_runs).toBe(4);
+      expect(overview.success_count).toBe(2);
+      expect(overview.failed_count).toBe(2);
+      expect(overview.success_rate).toBe(50);
+      expect(overview.retry_rate).toBe(25); // 1 out of 4
+    });
+
+    test('excludes fix runs', () => {
+      createAnalyticsRun({ id: 'b1', project: 'proj-a', status: 'success' });
+      // Insert a fix run directly
+      db.prepare(`
+        INSERT INTO runs (id, project, issue_id, issue_key, issue_title, branch, worktree_path, status, is_revision, is_fix, fix_type, fix_attempt, retry_attempt, iterations, created_at)
+        VALUES ('b2', 'proj-a', 'issue-a', 'A-1', 'Test', 'branch-a', '/tmp/wt', 'success', 0, 1, 'ci_failure', 1, 0, 0, datetime('now'))
+      `).run();
+
+      const overview = getAnalyticsOverview(30);
+      expect(overview.total_runs).toBe(1); // fix run excluded
+    });
+  });
+
+  describe('getProjectStats', () => {
+    test('groups runs by project', () => {
+      createAnalyticsRun({ id: 'p1', project: 'proj-a', status: 'success' });
+      createAnalyticsRun({ id: 'p2', project: 'proj-a', status: 'failed' });
+      createAnalyticsRun({ id: 'p3', project: 'proj-b', status: 'success' });
+
+      const stats = getProjectStats(30);
+      expect(stats.length).toBe(2);
+
+      const projA = stats.find(s => s.project === 'proj-a');
+      expect(projA).toBeTruthy();
+      expect(projA!.total_runs).toBe(2);
+      expect(projA!.success_count).toBe(1);
+      expect(projA!.failed_count).toBe(1);
+
+      const projB = stats.find(s => s.project === 'proj-b');
+      expect(projB).toBeTruthy();
+      expect(projB!.total_runs).toBe(1);
+      expect(projB!.success_count).toBe(1);
+    });
+
+    test('returns empty array when no runs exist', () => {
+      const stats = getProjectStats(30);
+      expect(stats).toEqual([]);
+    });
+  });
+
+  describe('getDailyThroughput', () => {
+    test('returns date-keyed data', () => {
+      createAnalyticsRun({ id: 'd1', project: 'proj-a', status: 'success', created_at: '2026-03-24 10:00:00' });
+      createAnalyticsRun({ id: 'd2', project: 'proj-a', status: 'failed', created_at: '2026-03-24 14:00:00' });
+      createAnalyticsRun({ id: 'd3', project: 'proj-a', status: 'success', created_at: '2026-03-25 09:00:00' });
+
+      const throughput = getDailyThroughput(30);
+      expect(throughput.length).toBe(2);
+      for (const row of throughput) {
+        expect(row.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        expect(row.total).toBeGreaterThan(0);
+      }
+
+      const day24 = throughput.find(t => t.date === '2026-03-24');
+      expect(day24).toBeTruthy();
+      expect(day24!.total).toBe(2);
+      expect(day24!.success).toBe(1);
+      expect(day24!.failed).toBe(1);
+    });
+
+    test('returns empty array when no runs exist', () => {
+      const throughput = getDailyThroughput(30);
+      expect(throughput).toEqual([]);
+    });
+  });
+
+  describe('getFailureBreakdown', () => {
+    test('categorizes errors correctly', () => {
+      createAnalyticsRun({ id: 'f1', project: 'proj-a', status: 'failed', error_summary: 'Agent timed out after 30m' });
+      createAnalyticsRun({ id: 'f2', project: 'proj-a', status: 'failed', error_summary: 'No commits produced' });
+      createAnalyticsRun({ id: 'f3', project: 'proj-a', status: 'failed', error_summary: 'No commits produced' });
+      createAnalyticsRun({ id: 'f4', project: 'proj-a', status: 'failed', error_summary: 'orchestrator restarted' });
+      createAnalyticsRun({ id: 'f5', project: 'proj-a', status: 'failed', error_summary: 'something unexpected' });
+
+      const breakdown = getFailureBreakdown(30);
+      expect(breakdown.length).toBeGreaterThan(0);
+
+      const timeout = breakdown.find(b => b.category === 'Timeout');
+      expect(timeout).toBeTruthy();
+      expect(timeout!.count).toBe(1);
+
+      const noCommits = breakdown.find(b => b.category === 'No commits produced');
+      expect(noCommits).toBeTruthy();
+      expect(noCommits!.count).toBe(2);
+
+      const restart = breakdown.find(b => b.category === 'Orchestrator restart');
+      expect(restart).toBeTruthy();
+      expect(restart!.count).toBe(1);
+    });
+
+    test('filters by project when specified', () => {
+      createAnalyticsRun({ id: 'g1', project: 'proj-a', status: 'failed', error_summary: 'timed out' });
+      createAnalyticsRun({ id: 'g2', project: 'proj-b', status: 'failed', error_summary: 'timed out' });
+
+      const breakdownA = getFailureBreakdown(30, 'proj-a');
+      const total = breakdownA.reduce((sum, b) => sum + b.count, 0);
+      expect(total).toBe(1);
+    });
+
+    test('returns empty array when no failures', () => {
+      createAnalyticsRun({ id: 'h1', project: 'proj-a', status: 'success' });
+      const breakdown = getFailureBreakdown(30);
+      expect(breakdown).toEqual([]);
     });
   });
 });

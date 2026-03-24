@@ -307,6 +307,20 @@ td {
 }
 #btn-load-more:hover { border-color: var(--text-muted); color: #fff; }
 #btn-load-more:disabled { opacity: 0.4; cursor: default; }
+
+/* Analytics */
+.stat-card {
+  background: var(--bg2);
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 100px;
+  display: flex;
+  flex-direction: column;
+}
+.stat-value { font-size: 20px; font-weight: 700; color: var(--blue); }
+.stat-label { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.project-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 11px; }
+.project-bar { height: 14px; border-radius: 3px; min-width: 2px; }
 </style>
 </head>
 <body>
@@ -336,6 +350,26 @@ td {
   </select>
   <span id="project-desc"></span>
 </div>
+
+<section id="analytics" style="padding: 16px; border-bottom: 1px solid var(--border);">
+  <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
+    <div class="stat-card" id="stat-total"><span class="stat-value">&mdash;</span><span class="stat-label">Total Runs</span></div>
+    <div class="stat-card" id="stat-success"><span class="stat-value">&mdash;</span><span class="stat-label">Success Rate</span></div>
+    <div class="stat-card" id="stat-duration"><span class="stat-value">&mdash;</span><span class="stat-label">Avg Duration</span></div>
+    <div class="stat-card" id="stat-sessions"><span class="stat-value">&mdash;</span><span class="stat-label">Avg Sessions</span></div>
+    <div class="stat-card" id="stat-retry"><span class="stat-value">&mdash;</span><span class="stat-label">Retry Rate</span></div>
+  </div>
+  <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+    <div id="throughput-chart" style="flex: 2; min-width: 300px; background: var(--bg2); border-radius: 6px; padding: 12px;">
+      <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">Daily Throughput (30d)</div>
+      <div id="throughput-bars" style="display: flex; align-items: flex-end; gap: 2px; height: 80px;"></div>
+    </div>
+    <div id="project-stats" style="flex: 1; min-width: 200px; background: var(--bg2); border-radius: 6px; padding: 12px;">
+      <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">By Project</div>
+      <div id="project-bars"></div>
+    </div>
+  </div>
+</section>
 
 <div id="table-wrap">
   <table>
@@ -758,8 +792,58 @@ btnLoadMore.addEventListener('click', async () => {
   await fetchRuns(true);
 });
 
+// ── Analytics ─────────────────────────────────────────────────────────────────
+async function loadAnalytics() {
+  try {
+    const [overview, throughput, projects] = await Promise.all([
+      fetch('/api/analytics/overview').then(r => r.json()),
+      fetch('/api/analytics/throughput').then(r => r.json()),
+      fetch('/api/analytics/projects').then(r => r.json()),
+    ]);
+
+    // Stats cards
+    document.querySelector('#stat-total .stat-value').textContent = overview.total_runs;
+    document.querySelector('#stat-success .stat-value').textContent = overview.success_rate + '%';
+    document.querySelector('#stat-duration .stat-value').textContent = overview.avg_duration_seconds > 60
+      ? Math.round(overview.avg_duration_seconds / 60) + 'm'
+      : overview.avg_duration_seconds + 's';
+    document.querySelector('#stat-sessions .stat-value').textContent = overview.avg_iterations;
+    document.querySelector('#stat-retry .stat-value').textContent = overview.retry_rate + '%';
+
+    // Throughput bar chart
+    const maxTotal = Math.max(...throughput.map(d => d.total), 1);
+    const barsEl = document.getElementById('throughput-bars');
+    barsEl.innerHTML = throughput.map(d => {
+      const h = Math.max(2, (d.total / maxTotal) * 70);
+      const successH = Math.max(0, (d.success / maxTotal) * 70);
+      const failedH = h - successH;
+      return `<div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end;" title="${esc(d.date)}: ${esc(d.total)} runs">
+        <div style="height:${failedH}px; background:var(--red); border-radius:2px 2px 0 0; min-width:4px;"></div>
+        <div style="height:${successH}px; background:var(--green); border-radius:0 0 2px 2px; min-width:4px;"></div>
+      </div>`;
+    }).join('');
+
+    // Project breakdown
+    const maxRuns = Math.max(...projects.map(p => p.total_runs), 1);
+    const projectEl = document.getElementById('project-bars');
+    projectEl.innerHTML = projects.slice(0, 8).map(p => {
+      const w = Math.max(2, (p.total_runs / maxRuns) * 100);
+      const color = p.success_rate >= 70 ? 'var(--green)' : p.success_rate >= 40 ? 'var(--yellow)' : 'var(--red)';
+      return `<div class="project-row">
+        <span style="min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(p.project)}</span>
+        <div class="project-bar" style="width:${w}%; background:${color};"></div>
+        <span style="color:var(--text-dim); min-width:40px;">${esc(p.total_runs)} (${esc(p.success_rate)}%)</span>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.warn('Failed to load analytics:', err);
+  }
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 Promise.all([fetchConfig(), fetchProjectMeta()]).then(() => fetchRuns());
+loadAnalytics();
+setInterval(loadAnalytics, 60000);
 connectSSE();
 startTicker();
 </script>
