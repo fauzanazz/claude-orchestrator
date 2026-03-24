@@ -955,6 +955,12 @@ export async function executeRun(
       let isFirstRun = true;
       let previousSummary: string | undefined;
 
+      // Inject retry context for retry runs (retry_attempt > 0)
+      const retryContext = retryContextMap.get(runId);
+      if (retryContext) {
+        retryContextMap.delete(runId); // Clean up after reading
+      }
+
       for (let iteration = 0; iteration < config.maxSessionIterations; iteration++) {
         const elapsed = Date.now() - runStartTime;
         if (elapsed > config.agentTimeoutMs) {
@@ -967,6 +973,12 @@ export async function executeRun(
           isFirstSession: isFirstRun,
           codebaseSummary,
         });
+
+        // Append retry context on the first session of a retry run
+        if (isFirstRun && retryContext) {
+          sessionBase += '\n\n---\n\n' + retryContext;
+        }
+
         if (isFirstRun && prInstructions) sessionBase += prInstructions;
         if (isFirstRun && initFailure) {
           sessionBase += `\n\n## Warning: Dependency Install Failed\n\n\`${initFailure}\`\n\nRun the install command yourself before proceeding.`;
@@ -1169,7 +1181,8 @@ export async function executeRun(
 
         // Insert retry run into DB immediately (blocks poll loop from re-spawning),
         // but delay adding it to the in-memory queue.
-        const retryRunId = enqueueRetry(run, issue, config.runRetryDelayMs);
+        // Pass failedRun (has error_summary) so buildRetryContext can read it.
+        const retryRunId = enqueueRetry(failedRun ?? run, issue, config.runRetryDelayMs);
         if (retryRunId) {
           console.log(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
         }
@@ -1196,6 +1209,7 @@ export async function executeRun(
 
   } finally {
     flushLogs(runId);
+    retryContextMap.delete(runId); // Clean up in case it wasn't consumed
     if (projectPath && worktreePath) {
       cleanupWorktree(projectPath, worktreePath).catch(() => {});
     }
@@ -1232,6 +1246,47 @@ export function flushAllLogs(): void {
 
 // Sidecar map: runId -> Issue (kept in memory for the lifetime of the queue item)
 const issueMap: Map<string, Issue> = new Map();
+
+// Retry context: stores failure context from parent run for injection into retry prompts.
+// Keyed by the *retry* run ID. Acceptable to lose on orchestrator restart.
+const retryContextMap: Map<string, string> = new Map();
+
+export function buildRetryContext(failedRun: Run): string {
+  const sections: string[] = [];
+
+  sections.push('## Previous Attempt Failed');
+  sections.push('');
+  sections.push('The orchestrator is automatically retrying this task because the previous attempt failed.');
+  sections.push(`- **Previous attempt**: ${failedRun.retry_attempt + 1}`);
+  sections.push(`- **Error**: ${failedRun.error_summary ?? 'Unknown error'}`);
+  sections.push(`- **Sessions completed**: ${failedRun.iterations}`);
+
+  // Read logs from in-memory buffer (not yet flushed to DB at this point)
+  const buffered = logBuffers.get(failedRun.id);
+  if (buffered && buffered.length > 0) {
+    const tail = buffered.slice(-30);
+    const logText = tail
+      .map((e) => `[${e.stream}] ${e.content}`)
+      .join('\n');
+    sections.push('');
+    sections.push(`### What the previous attempt did (last ${tail.length} log entries)`);
+    sections.push('```');
+    sections.push(logText);
+    sections.push('```');
+  }
+
+  sections.push('');
+  sections.push('### Instructions for this retry');
+  sections.push('');
+  sections.push('- Review the error and logs above carefully.');
+  sections.push('- **Do NOT repeat the same approach** that caused the failure.');
+  sections.push('- If the error was a timeout, focus on the most critical features first and skip exploratory work.');
+  sections.push('- If the error was "No commits produced", make sure to actually write code and commit it.');
+  sections.push('- If the error was a git or setup issue, try an alternative approach to the setup step.');
+  sections.push('- Start by reading `.agent-state/features.json` and `.agent-state/progress.md` if they exist from the previous attempt.');
+
+  return sections.join('\n');
+}
 
 export function enqueue(run: Run): boolean {
   if (queue.length >= config.maxQueueSize) {
@@ -1302,6 +1357,9 @@ export function enqueueRetry(
   const nextAttempt = (failedRun.retry_attempt ?? 0) + 1;
   if (nextAttempt > config.maxRunRetries) return null;
 
+  // Build retry context from the failed run BEFORE logs are flushed
+  const retryContext = buildRetryContext(failedRun);
+
   const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
     id: ulid(),
     project: failedRun.project,
@@ -1332,6 +1390,9 @@ export function enqueueRetry(
 
   const fullRun = getRun(newRun.id);
   if (!fullRun) return null;
+
+  // Store context for the retry run to read during execution
+  retryContextMap.set(newRun.id, retryContext);
 
   broadcastSSE({ type: 'run_update', run: fullRun });
 

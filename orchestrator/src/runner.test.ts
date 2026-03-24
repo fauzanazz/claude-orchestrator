@@ -6,7 +6,10 @@ import {
   parseReviewFeedback,
   readAgentSignal,
   parseIssueMetadata,
+  buildRetryContext,
+  logBuffers,
 } from './runner.ts';
+import type { Run } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // buildSpawnArgs
@@ -240,5 +243,98 @@ describe('parseIssueMetadata', () => {
   test('returns null for empty description', () => {
     const result = parseIssueMetadata('');
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildRetryContext
+// ---------------------------------------------------------------------------
+
+describe('buildRetryContext', () => {
+  test('includes error summary from failed run', () => {
+    const failedRun = {
+      id: 'run-1',
+      retry_attempt: 0,
+      iterations: 2,
+      error_summary: 'Agent timed out after 1800000ms',
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('Agent timed out');
+    expect(context).toContain('Previous Attempt Failed');
+    expect(context).toContain('Do NOT repeat');
+  });
+
+  test('includes log entries if available in buffer', () => {
+    const runId = 'retry-test-run';
+    logBuffers.set(runId, [
+      { stream: 'stdout', content: 'tool: Read(...)' },
+      { stream: 'system', content: '[runner] Session 1 exited' },
+    ]);
+    const failedRun = {
+      id: runId,
+      retry_attempt: 0,
+      iterations: 1,
+      error_summary: 'fail',
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('tool: Read');
+    expect(context).toContain('Session 1 exited');
+    expect(context).toContain('last 2 log entries');
+    logBuffers.delete(runId);
+  });
+
+  test('handles missing log buffer gracefully', () => {
+    const failedRun = {
+      id: 'no-logs',
+      retry_attempt: 1,
+      iterations: 0,
+      error_summary: 'crash',
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('crash');
+    expect(context).not.toContain('log entries');
+  });
+
+  test('handles null error_summary', () => {
+    const failedRun = {
+      id: 'no-error',
+      retry_attempt: 0,
+      iterations: 0,
+      error_summary: null,
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('Unknown error');
+  });
+
+  test('takes only last 30 log entries', () => {
+    const runId = 'many-logs-run';
+    const entries = Array.from({ length: 50 }, (_, i) => ({
+      stream: 'stdout',
+      content: `log line ${i}`,
+    }));
+    logBuffers.set(runId, entries);
+    const failedRun = {
+      id: runId,
+      retry_attempt: 0,
+      iterations: 3,
+      error_summary: 'timeout',
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('last 30 log entries');
+    expect(context).not.toContain('log line 19');
+    expect(context).toContain('log line 20');
+    expect(context).toContain('log line 49');
+    logBuffers.delete(runId);
+  });
+
+  test('shows correct attempt number', () => {
+    const failedRun = {
+      id: 'attempt-2',
+      retry_attempt: 1,
+      iterations: 1,
+      error_summary: 'failed again',
+    } as Run;
+    const context = buildRetryContext(failedRun);
+    expect(context).toContain('**Previous attempt**: 2');
   });
 });
