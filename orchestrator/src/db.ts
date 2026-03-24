@@ -566,6 +566,19 @@ export function hasActiveRunForIssue(issueId: string, excludeRunId?: string): bo
   ).get(issueId) !== null;
 }
 
+export function getSiblingOpenPRRuns(project: string, excludeIssueKey: string): Run[] {
+  return db.prepare<Run, [string, string]>(`
+    SELECT * FROM runs
+    WHERE project = ?
+      AND issue_key != ?
+      AND pr_number IS NOT NULL
+      AND status = 'success'
+      AND is_fix = 0
+      AND is_revision = 0
+    ORDER BY created_at ASC
+  `).all(project, excludeIssueKey);
+}
+
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {
   // Find the original (non-fix, non-revision) run that created this PR
   if (projectKey) {

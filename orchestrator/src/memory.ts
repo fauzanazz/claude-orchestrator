@@ -246,10 +246,10 @@ function parseGeminiJson(raw: string): unknown {
 
 export function parseDelimitedDocs(raw: string): Record<string, string> {
   const docs: Record<string, string> = {};
-  // Strip markdown code fences Gemini sometimes wraps despite instructions
+  // Strip markdown code fences (3+ backticks) Gemini sometimes wraps despite instructions
   let text = raw.trim();
-  const fenceMatch = text.match(/^```(?:\w*)\s*\n([\s\S]*?)\n```$/);
-  if (fenceMatch?.[1]) text = fenceMatch[1].trim();
+  const fenceMatch = text.match(/^(`{3,})(?:\w*)\s*\n([\s\S]*?)\n\1\s*$/);
+  if (fenceMatch?.[2]) text = fenceMatch[2].trim();
   const parts = text.split(/^<<<([^>]+)>>>$/m);
   // parts: [preamble, filename1, content1, filename2, content2, ...]
   for (let i = 1; i + 1 < parts.length; i += 2) {
@@ -346,12 +346,14 @@ Rules for the output format:
   });
 
   const finishReason = response.candidates?.[0]?.finishReason;
-  if (finishReason === 'MAX_TOKENS') {
-    throw new Error('Gemini docs response truncated (hit output token limit)');
+  if (finishReason && finishReason !== 'STOP') {
+    throw new Error(`Gemini docs response ended with reason: ${finishReason}`);
   }
 
   const text = response.text;
-  if (!text) throw new Error('Gemini docs response empty');
+  if (!text || text.trim().length < 10) {
+    throw new Error(`Gemini docs response empty or too short (${text?.length ?? 0} chars)`);
+  }
 
   return parseDelimitedDocs(text);
 }
