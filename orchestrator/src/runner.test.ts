@@ -6,6 +6,7 @@ import {
   parseReviewFeedback,
   readAgentSignal,
   parseIssueMetadata,
+  chunkArray,
 } from './runner.ts';
 
 // ---------------------------------------------------------------------------
@@ -240,5 +241,23 @@ describe('parseIssueMetadata', () => {
   test('returns null for empty description', () => {
     const result = parseIssueMetadata('');
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chunkArray
+// ---------------------------------------------------------------------------
+
+describe('chunkArray', () => {
+  test('splits array into chunks of specified size', () => {
+    expect(chunkArray([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+  });
+
+  test('returns single chunk if array is smaller than size', () => {
+    expect(chunkArray([1, 2], 5)).toEqual([[1, 2]]);
+  });
+
+  test('returns empty array for empty input', () => {
+    expect(chunkArray([], 3)).toEqual([]);
   });
 });

@@ -71,6 +71,14 @@ import type {
 
 const ulid = monotonicFactory();
 
+export function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 class NonRetryableError extends Error {
   constructor(message: string) {
     super(message);
@@ -188,50 +196,72 @@ export async function pollLinear(): Promise<LinearIssue[]> {
 
   clearParentStateCache();
 
-  // Step 2: Read full details for each matching issue (has id + description)
+  // Step 2: Fetch full details concurrently (5 at a time)
+  const POLL_CONCURRENCY = 5;
+  const chunks = chunkArray(ready, POLL_CONCURRENCY);
   const issues: LinearIssue[] = [];
-  for (const summary of ready) {
-    const identifier = summary.identifier;
-    const readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
-    let detailJson: unknown;
-    try {
-      detailJson = JSON.parse(readOut);
-    } catch {
-      console.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
-      continue;
-    }
-    const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
-    if (!detailResult.success) {
-      console.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
-      continue;
-    }
-    const full = detailResult.data;
 
-    if (full.description.includes('design:') || (full.description.includes('branch:') && full.description.includes('repo:'))) {
-      // "In Progress" issues are only re-picked if the orchestrator previously ran them
-      // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
-      if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
-        console.log(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
-        continue;
-      }
+  for (const chunk of chunks) {
+    const results = await Promise.all(
+      chunk.map(async (summary): Promise<LinearIssue | null> => {
+        const identifier = summary.identifier;
 
-      // lineark doesn't return parent — fetch from Linear API directly
-      const parent = await fetchLinearParent(full.id);
-      if (parent?.identifier) {
-        const done = await isParentDone(parent.identifier);
-        if (!done) {
-          console.log(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
-          continue;
+        let readOut: string;
+        try {
+          readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
+        } catch (err) {
+          console.warn(`[runner] lineark read failed for ${identifier}: ${err instanceof Error ? err.message : err}`);
+          return null;
         }
-      }
 
-      issues.push({
-        id: full.id,
-        identifier: full.identifier,
-        title: full.title,
-        description: full.description,
-        parent: parent ?? undefined,
-      });
+        let detailJson: unknown;
+        try {
+          detailJson = JSON.parse(readOut);
+        } catch {
+          console.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
+          return null;
+        }
+
+        const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
+        if (!detailResult.success) {
+          console.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
+          return null;
+        }
+        const full = detailResult.data;
+
+        if (!full.description.includes('design:') && !(full.description.includes('branch:') && full.description.includes('repo:'))) {
+          return null;
+        }
+
+        // "In Progress" issues are only re-picked if the orchestrator previously ran them
+        // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
+        if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
+          console.log(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
+          return null;
+        }
+
+        // lineark doesn't return parent — fetch from Linear API directly
+        const parent = await fetchLinearParent(full.id);
+        if (parent?.identifier) {
+          const done = await isParentDone(parent.identifier);
+          if (!done) {
+            console.log(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
+            return null;
+          }
+        }
+
+        return {
+          id: full.id,
+          identifier: full.identifier,
+          title: full.title,
+          description: full.description,
+          parent: parent ?? undefined,
+        };
+      })
+    );
+
+    for (const result of results) {
+      if (result) issues.push(result);
     }
   }
 
