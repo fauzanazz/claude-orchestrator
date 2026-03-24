@@ -75,6 +75,12 @@ export interface Run {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+  // Token tracking
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
   // Persisted issue metadata for restart recovery (optional — absent on legacy rows)
   design_path?: string | null;
   issue_repo?: string | null;

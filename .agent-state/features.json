@@ -1,14 +1,11 @@
 [
-  { "name": "analytics-overview-query", "description": "Analytics overview query: total runs, success rate, avg duration, avg sessions, retry rate", "passes": true },
-  { "name": "project-stats-query", "description": "Per-project breakdown query: same metrics grouped by project", "passes": true },
-  { "name": "daily-throughput-query", "description": "Daily throughput query: runs per day over configurable period", "passes": true },
-  { "name": "failure-breakdown-query", "description": "Failure breakdown query: top error categories with counts", "passes": true },
-  { "name": "api-analytics-overview", "description": "GET /api/analytics/overview endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-projects", "description": "GET /api/analytics/projects endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-throughput", "description": "GET /api/analytics/throughput endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-failures", "description": "GET /api/analytics/failures endpoint with ?days=N and ?project params", "passes": true },
-  { "name": "dashboard-stat-cards", "description": "Dashboard analytics section with stat cards (total, success rate, duration, sessions, retry rate)", "passes": true },
-  { "name": "dashboard-throughput-chart", "description": "Dashboard throughput bar chart (daily runs over 30d)", "passes": true },
-  { "name": "dashboard-project-breakdown", "description": "Dashboard per-project breakdown with color-coded bars", "passes": true },
-  { "name": "analytics-tests", "description": "Tests for all analytics query functions", "passes": true }
+  { "name": "token-tracker-module", "description": "Create TokenTracker class that parses stream-json result events and accumulates token usage", "passes": true },
+  { "name": "db-token-columns", "description": "Add input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd columns to runs table", "passes": true },
+  { "name": "db-update-tokens-fn", "description": "Add updateRunTokens function to persist token data per run", "passes": true },
+  { "name": "db-cost-summary-fn", "description": "Add getCostSummary function for aggregate cost queries with project breakdown", "passes": true },
+  { "name": "run-type-token-fields", "description": "Add token tracking fields to Run interface in types.ts", "passes": true },
+  { "name": "runner-stream-callback", "description": "Add onRawLine callback to streamOutput for token parsing", "passes": true },
+  { "name": "runner-token-integration", "description": "Integrate TokenTracker into executeRun for both fix and normal runs", "passes": true },
+  { "name": "cost-api-endpoint", "description": "Add GET /api/cost endpoint for aggregate cost summaries", "passes": true },
+  { "name": "token-tracker-tests", "description": "Unit tests for TokenTracker parsing, accumulation, and cost estimation", "passes": true }
 ]

@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import { monotonicFactory } from 'ulid';
 import { config } from './config.ts';
 import { documentRun, readProjectMemory } from './memory.ts';
+import { TokenTracker } from './token-tracker.ts';
 import {
   insertRun,
   insertLog,
   updateRunStatus,
   updateRunIterations,
+  updateRunTokens,
   getRun,
   getRunByBranch,
   getRunsByStatus,
@@ -725,6 +727,7 @@ async function streamOutput(
   stream: ReadableStream<Uint8Array> | number | null | undefined,
   runId: string,
   streamName: 'stdout' | 'stderr',
+  onRawLine?: (line: string) => void,
 ): Promise<void> {
   if (!stream || typeof stream === 'number') return;
 
@@ -741,6 +744,7 @@ async function streamOutput(
           bufferLog(runId, streamName, text);
         } else {
           for (const line of text.split('\n').filter(Boolean)) {
+            onRawLine?.(line);
             const readable = parseAgentEvent(line);
             if (readable) {
               bufferLog(runId, streamName, readable);
@@ -868,6 +872,7 @@ export async function executeRun(
   issue: Issue,
 ): Promise<void> {
   const runId = run.id;
+  const tokenTracker = new TokenTracker();
   let worktreePath: string | null = null;
   let projectPath: string | null = null;
 
@@ -943,6 +948,7 @@ export async function executeRun(
       bufferLog(runId, 'system', `[runner] Spawning claude agent for fix`);
 
       const fixModel = project.fixModel ?? config.defaultFixModel ?? project.model ?? config.defaultModel;
+      tokenTracker.setModel(fixModel);
       const agentProc = Bun.spawn(
         buildSpawnArgs(fixPrompt, fixModel),
         { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
@@ -956,7 +962,7 @@ export async function executeRun(
         setTimeout(() => resolve('timeout'), config.agentTimeoutMs),
       );
       const completion = Promise.all([
-        streamOutput(agentProc.stdout, runId, 'stdout'),
+        streamOutput(agentProc.stdout, runId, 'stdout', (line) => tokenTracker.parseAndAccumulate(line)),
         streamOutput(agentProc.stderr, runId, 'stderr'),
         agentProc.exited,
       ]).then(() => 'done' as const);
@@ -1043,6 +1049,7 @@ export async function executeRun(
         bufferLog(runId, 'system', `[runner] Starting session ${iteration + 1}/${config.maxSessionIterations}`);
 
         const runModel = project.model ?? config.defaultModel;
+        tokenTracker.setModel(runModel);
         const agentProc = Bun.spawn(
           buildSpawnArgs(prompt, runModel),
           { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
@@ -1055,7 +1062,7 @@ export async function executeRun(
         );
 
         const completion = Promise.all([
-          streamOutput(agentProc.stdout, runId, 'stdout'),
+          streamOutput(agentProc.stdout, runId, 'stdout', (line) => tokenTracker.parseAndAccumulate(line)),
           streamOutput(agentProc.stderr, runId, 'stderr'),
           agentProc.exited,
         ]).then(() => 'done' as const);
@@ -1106,6 +1113,21 @@ export async function executeRun(
 
       bufferLog(runId, 'system', `[runner] Loop finished after ${completedSessions} session(s)`);
     }
+
+    // Record token usage
+    const costEstimate = tokenTracker.estimateCost();
+    updateRunTokens(runId, {
+      input_tokens: costEstimate.input_tokens,
+      output_tokens: costEstimate.output_tokens,
+      cache_read_tokens: costEstimate.cache_read_tokens,
+      cache_creation_tokens: costEstimate.cache_creation_tokens,
+      cost_usd: costEstimate.cost_usd,
+    });
+    bufferLog(runId, 'system',
+      `[runner] Token usage: ${costEstimate.input_tokens} in / ${costEstimate.output_tokens} out ` +
+      `(cache: ${costEstimate.cache_read_tokens} read, ${costEstimate.cache_creation_tokens} created) ` +
+      `≈ $${costEstimate.cost_usd}`
+    );
 
     const hasCommits = await hasLocalCommits(worktreePath!);
 
@@ -1206,6 +1228,12 @@ export async function executeRun(
     }
 
   } catch (err) {
+    // Record token usage even on failure
+    const failCost = tokenTracker.estimateCost();
+    if (failCost.input_tokens > 0 || failCost.output_tokens > 0) {
+      updateRunTokens(runId, failCost);
+    }
+
     const errorMessage = err instanceof Error ? err.message : String(err);
     bufferLog(runId, 'system', `[runner] Run ${runId} failed: ${errorMessage}`);
     updateRunStatus(runId, 'failed', {
@@ -1376,6 +1404,11 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
     design_path: issue.designPath,
     issue_repo: issue.repo,
     base_branch: issue.baseBranch,
@@ -1425,6 +1458,11 @@ export function enqueueRetry(
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
     design_path: failedRun.design_path ?? null,
     issue_repo: failedRun.issue_repo ?? null,
     base_branch: failedRun.base_branch ?? null,
@@ -1483,6 +1521,11 @@ export function enqueueFix(
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
     design_path: issue.designPath,
     issue_repo: issue.repo,
     base_branch: issue.baseBranch,
@@ -1893,6 +1936,11 @@ export function startRunner(): void {
           iterations: 0,
           error_summary: null,
           pr_url: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0,
+          cost_usd: 0,
           design_path: issue.designPath,
           issue_repo: issue.repo,
           base_branch: issue.baseBranch,
