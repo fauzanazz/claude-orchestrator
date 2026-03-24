@@ -177,25 +177,25 @@ Add these routes after the existing `/api/runs` routes:
 ```typescript
 // GET /api/analytics/overview — aggregate stats
 app.get('/api/analytics/overview', (c) => {
-  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  const days = Math.min(Math.max(1, parseInt(c.req.query('days') ?? '30', 10) || 30), 365);
   return c.json(getAnalyticsOverview(days));
 });
 
 // GET /api/analytics/projects — per-project breakdown
 app.get('/api/analytics/projects', (c) => {
-  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  const days = Math.min(Math.max(1, parseInt(c.req.query('days') ?? '30', 10) || 30), 365);
   return c.json(getProjectStats(days));
 });
 
 // GET /api/analytics/throughput — daily run counts
 app.get('/api/analytics/throughput', (c) => {
-  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  const days = Math.min(Math.max(1, parseInt(c.req.query('days') ?? '30', 10) || 30), 365);
   return c.json(getDailyThroughput(days));
 });
 
 // GET /api/analytics/failures — failure cause breakdown
 app.get('/api/analytics/failures', (c) => {
-  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  const days = Math.min(Math.max(1, parseInt(c.req.query('days') ?? '30', 10) || 30), 365);
   const project = c.req.query('project');
   return c.json(getFailureBreakdown(days, project || undefined));
 });
@@ -273,7 +273,7 @@ async function loadAnalytics() {
       const h = Math.max(2, (d.total / maxTotal) * 70);
       const successH = Math.max(0, (d.success / maxTotal) * 70);
       const failedH = h - successH;
-      return `<div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end;" title="${d.date}: ${d.total} runs">
+      return `<div style="flex:1; display:flex; flex-direction:column; justify-content:flex-end;" title="${esc(d.date)}: ${d.total} runs">
         <div style="height:${failedH}px; background:var(--red); border-radius:2px 2px 0 0; min-width:4px;"></div>
         <div style="height:${successH}px; background:var(--green); border-radius:0 0 2px 2px; min-width:4px;"></div>
       </div>`;
@@ -286,7 +286,7 @@ async function loadAnalytics() {
       const w = Math.max(2, (p.total_runs / maxRuns) * 100);
       const color = p.success_rate >= 70 ? 'var(--green)' : p.success_rate >= 40 ? 'var(--yellow)' : 'var(--red)';
       return `<div class="project-row">
-        <span style="min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${p.project}</span>
+        <span style="min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(p.project)}</span>
         <div class="project-bar" style="width:${w}%; background:${color};"></div>
         <span style="color:var(--text-dim); min-width:40px;">${p.total_runs} (${p.success_rate}%)</span>
       </div>`;
