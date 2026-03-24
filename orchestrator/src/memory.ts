@@ -411,6 +411,9 @@ export async function readProjectMemory(
   projectKey: string,
   opts?: { issueTitle?: string; issueKey?: string },
 ): Promise<string | null> {
+  // Guard against empty/whitespace keys — would produce unrelated search results
+  if (!projectKey || !projectKey.trim()) return null;
+
   // Check obsidian-memory availability
   try {
     await $`which obsidian-memory`.quiet();
@@ -453,14 +456,21 @@ export async function readProjectMemory(
 
   if (sections.length === 0) return null;
 
-  return [
+  const header = [
     '## Project Memory (from past agent sessions)',
     '',
     'The following context was gathered from previous agent sessions working on this project.',
     'Use it to avoid re-discovering patterns, conventions, and project structure.',
     '',
-    ...sections,
   ].join('\n');
+
+  const body = sections.join('\n');
+
+  // Hard-cap total output to MEMORY_MAX_CHARS (header + body)
+  const maxBody = MEMORY_MAX_CHARS - header.length;
+  const trimmedBody = maxBody > 0 ? body.slice(0, maxBody) : '';
+
+  return header + trimmedBody;
 }
 
 /**

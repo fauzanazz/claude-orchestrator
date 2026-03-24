@@ -273,7 +273,12 @@ describe('readProjectMemory', () => {
 
   test('returns null for empty project key', async () => {
     const result = await readProjectMemory('');
-    expect(result === null || typeof result === 'string').toBe(true);
+    expect(result).toBeNull();
+  });
+
+  test('returns null for whitespace-only project key', async () => {
+    const result = await readProjectMemory('   ');
+    expect(result).toBeNull();
   });
 
   test('caps output at MEMORY_MAX_CHARS + header overhead', async () => {
