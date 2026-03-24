@@ -1398,10 +1398,14 @@ export function enqueueRetry(
 
   if (delayMs > 0) {
     setTimeout(() => {
-      enqueueWithIssue(fullRun, issue);
+      if (!enqueueWithIssue(fullRun, issue)) {
+        retryContextMap.delete(newRun.id);
+      }
     }, delayMs);
   } else {
-    enqueueWithIssue(fullRun, issue);
+    if (!enqueueWithIssue(fullRun, issue)) {
+      retryContextMap.delete(newRun.id);
+    }
   }
 
   return newRun.id;
