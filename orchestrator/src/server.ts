@@ -9,6 +9,7 @@ import {
   db, listRuns, getLogsForRun, getRun, getRunByBranch, insertRun,
   isReviewProcessed, markReviewProcessed,
   countQueuedForIssue, getLatestRunTimeForIssue, countTotalQueued,
+  getAnalyticsOverview, getProjectStats, getDailyThroughput, getFailureBreakdown,
 } from './db.ts';
 import {
   onSSE,
@@ -315,6 +316,31 @@ app.post('/api/runs/:id/retry', async (c) => {
   }
 
   return c.json({ id: newId });
+});
+
+// GET /api/analytics/overview — aggregate stats
+app.get('/api/analytics/overview', (c) => {
+  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  return c.json(getAnalyticsOverview(days));
+});
+
+// GET /api/analytics/projects — per-project breakdown
+app.get('/api/analytics/projects', (c) => {
+  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  return c.json(getProjectStats(days));
+});
+
+// GET /api/analytics/throughput — daily run counts
+app.get('/api/analytics/throughput', (c) => {
+  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  return c.json(getDailyThroughput(days));
+});
+
+// GET /api/analytics/failures — failure cause breakdown
+app.get('/api/analytics/failures', (c) => {
+  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  const project = c.req.query('project');
+  return c.json(getFailureBreakdown(days, project || undefined));
 });
 
 // GET /api/events — SSE endpoint (capped to config.maxSSEClients)
