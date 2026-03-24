@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { scrubSensitiveData, scrubRunContext, truncateContext } from './memory.ts';
+import { scrubSensitiveData, scrubRunContext, truncateContext, parseDelimitedDocs } from './memory.ts';
 import type { RunContext } from './memory.ts';
 
 describe('scrubSensitiveData', () => {
@@ -234,5 +234,32 @@ describe('truncateContext', () => {
       designDoc: '',
     };
     expect(truncateContext(context)).toEqual(context);
+  });
+});
+
+describe('parseDelimitedDocs', () => {
+  test('parses valid delimited response', () => {
+    const raw = '<<<Features.md>>>\n# Features\nSome content\n\n<<<Modules.md>>>\n# Modules\nOther content';
+    const result = parseDelimitedDocs(raw);
+    expect(result['Features.md']).toContain('# Features');
+    expect(result['Modules.md']).toContain('# Modules');
+  });
+
+  test('strips markdown code fences before parsing', () => {
+    const raw = '```\n<<<Features.md>>>\n# Features\nUpdated content\n```';
+    const result = parseDelimitedDocs(raw);
+    expect(result['Features.md']).toContain('# Features');
+  });
+
+  test('strips language-tagged code fences', () => {
+    const raw = '```markdown\n<<<Features.md>>>\n# Features\nContent here\n```';
+    const result = parseDelimitedDocs(raw);
+    expect(result['Features.md']).toContain('# Features');
+  });
+
+  test('throws for empty/unparseable response', () => {
+    expect(() => parseDelimitedDocs('just some text with no delimiters')).toThrow(
+      'Failed to parse delimited docs response',
+    );
   });
 });

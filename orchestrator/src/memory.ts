@@ -244,9 +244,13 @@ function parseGeminiJson(raw: string): unknown {
   }
 }
 
-function parseDelimitedDocs(raw: string): Record<string, string> {
+export function parseDelimitedDocs(raw: string): Record<string, string> {
   const docs: Record<string, string> = {};
-  const parts = raw.split(/^<<<([^>]+)>>>$/m);
+  // Strip markdown code fences Gemini sometimes wraps despite instructions
+  let text = raw.trim();
+  const fenceMatch = text.match(/^```(?:\w*)\s*\n([\s\S]*?)\n```$/);
+  if (fenceMatch?.[1]) text = fenceMatch[1].trim();
+  const parts = text.split(/^<<<([^>]+)>>>$/m);
   // parts: [preamble, filename1, content1, filename2, content2, ...]
   for (let i = 1; i + 1 < parts.length; i += 2) {
     const filename = parts[i]!.trim();

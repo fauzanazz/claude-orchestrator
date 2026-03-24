@@ -106,7 +106,12 @@ export async function setupWorktree(
     `agent-${issueKey}-${slug}`,
   );
 
-  // Remove any existing worktrees using the same local branch
+  // Remove any existing worktrees using the same local branch.
+  // A worktree can hold a branch in two ways:
+  //   1. Checked out normally (shows as `branch refs/heads/...` in porcelain)
+  //   2. Mid-rebase/detached but still "using" the branch (shows as `detached`)
+  // We handle both: first search by branch name, then let `branch -D` tell us
+  // if another worktree still holds the branch so we can remove it.
   const localBranch = `local/${branch}`;
   const listResult = await spawn(['git', '-C', projectPath, 'worktree', 'list', '--porcelain']);
   if (listResult.exitCode === 0) {
@@ -115,17 +120,41 @@ export async function setupWorktree(
       if (entry.includes(`branch refs/heads/${localBranch}`)) {
         const wtMatch = entry.match(/^worktree (.+)$/m);
         if (wtMatch?.[1]) {
-          await spawn(['git', '-C', projectPath, 'worktree', 'remove', '--force', wtMatch[1]]);
+          const rmResult = await spawn(['git', '-C', projectPath, 'worktree', 'remove', '--force', wtMatch[1]]);
+          if (rmResult.exitCode !== 0) {
+            await spawn(['rm', '-rf', wtMatch[1]]);
+          }
         }
       }
     }
   }
 
+  // Also remove the target worktree path if it already exists on disk
+  await spawn(['rm', '-rf', worktreePath]);
+
   // Prune stale worktree bookkeeping
   await spawn(['git', '-C', projectPath, 'worktree', 'prune']);
 
-  // Delete stale local branch if it exists from a previous run
-  await spawn(['git', '-C', projectPath, 'branch', '-D', localBranch]);
+  // Delete stale local branch. If branch -D fails because a detached/mid-rebase
+  // worktree still "holds" the branch, parse the worktree path from the error,
+  // remove it, prune, and retry.
+  const delBranch = await spawn(['git', '-C', projectPath, 'branch', '-D', localBranch]);
+  if (delBranch.exitCode !== 0) {
+    const wtPathMatch = delBranch.stderr.match(/used by worktree at '([^']+)'/);
+    if (wtPathMatch?.[1]) {
+      const rmWt = await spawn(['git', '-C', projectPath, 'worktree', 'remove', '--force', wtPathMatch[1]]);
+      if (rmWt.exitCode !== 0) {
+        await spawn(['rm', '-rf', wtPathMatch[1]]);
+      }
+      await spawn(['git', '-C', projectPath, 'worktree', 'prune']);
+      await spawn(['git', '-C', projectPath, 'branch', '-D', localBranch]);
+    }
+    // Final fallback: delete the ref directly
+    const check = await spawn(['git', '-C', projectPath, 'rev-parse', '--verify', `refs/heads/${localBranch}`]);
+    if (check.exitCode === 0) {
+      await spawn(['git', '-C', projectPath, 'update-ref', '-d', `refs/heads/${localBranch}`]);
+    }
+  }
 
   // Create the worktree tracking the remote branch
   const addResult = await spawn([
