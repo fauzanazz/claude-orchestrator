@@ -461,7 +461,7 @@ export function startServer(): void {
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: config.port,
-    fetch: app.fetch,
+    fetch: app.fetch.bind(app),
   });
 
   console.log(`[server] Listening on http://localhost:${config.port}`);

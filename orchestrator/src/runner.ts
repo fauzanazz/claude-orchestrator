@@ -19,6 +19,7 @@ import {
   upsertFixTracking,
   markFixExhausted,
   clearFixTracking,
+  deleteFixTracking,
   getRunByPRNumber,
   getIssueForRun,
   getPRNumberByIssueKey,
@@ -178,7 +179,7 @@ export async function pollLinear(): Promise<LinearIssue[]> {
     }
     const full = detailResult.data;
 
-    if (full.description.includes('design:')) {
+    if (full.description.includes('design:') || (full.description.includes('branch:') && full.description.includes('repo:'))) {
       // "In Progress" issues are only re-picked if the orchestrator previously ran them
       // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
       if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
@@ -218,9 +219,10 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
   const branch = branchMatch?.[1]?.trim();
   const repo = repoMatch?.[1]?.trim();
 
-  if (designPath && branch && repo) {
+  // Branch and repo are always required
+  if (branch && repo) {
     return {
-      designPath: validateDesignPath(designPath),
+      designPath: designPath ? validateDesignPath(designPath) : null,
       branch: validateBranch(branch),
       repo: validateRepo(repo),
     };
@@ -236,10 +238,10 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
   const pb = proseBranch?.[1]?.trim();
   const pr = proseRepo?.[1]?.trim();
 
-  if (!pd || !pb || !pr) return null;
+  if (!pb || !pr) return null;
 
   return {
-    designPath: validateDesignPath(pd),
+    designPath: pd ? validateDesignPath(pd) : null,
     branch: validateBranch(pb),
     repo: validateRepo(pr),
   };
@@ -259,6 +261,25 @@ export function commentOnIssue(key: string, message: string): void {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+}
+
+export function commentOnPR(repo: string, prNumber: number, body: string): void {
+  Bun.spawn(['gh', 'pr', 'comment', String(prNumber), '--repo', repo, '--body', body], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+function getAgentConclusion(runId: string): string | null {
+  const entries = logBuffers.get(runId);
+  if (!entries) return null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    if (entry.stream === 'stdout' && entry.content.startsWith('result: ')) {
+      return entry.content.slice('result: '.length).trim();
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +399,71 @@ export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
 // Prompt building
 // ---------------------------------------------------------------------------
 
+export function parseReviewFeedback(rawJson: string): string | undefined {
+  let parsed: { reviews?: unknown[]; comments?: unknown[] };
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return undefined;
+  }
+
+  const sections: string[] = [];
+
+  if (Array.isArray(parsed.reviews)) {
+    for (const review of parsed.reviews) {
+      const r = review as Record<string, unknown>;
+      const author = (r.author as Record<string, unknown>)?.login as string ?? 'unknown';
+      const state = (r.state as string ?? '').toLowerCase();
+      const body = (r.body as string ?? '').trim();
+      if (!body && state === 'approved') continue;
+      if (!body && state === 'commented') continue;
+      sections.push(`### ${author} (${state})\n\n${body || '_No comment body_'}`);
+    }
+  }
+
+  if (Array.isArray(parsed.comments)) {
+    for (const comment of parsed.comments) {
+      const c = comment as Record<string, unknown>;
+      const author = (c.author as Record<string, unknown>)?.login as string ?? 'unknown';
+      const body = (c.body as string ?? '').trim();
+      if (!body) continue;
+      sections.push(`### ${author} (comment)\n\n${body}`);
+    }
+  }
+
+  if (sections.length === 0) return undefined;
+  return sections.join('\n\n---\n\n');
+}
+
+export async function generateCodebaseSummary(worktreePath: string): Promise<string> {
+  const treeProc = Bun.spawn(
+    ['tree', '-L', '2', '--gitignore', '-I', 'node_modules|.git|.worktrees'],
+    { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
+  );
+  const [treeOut, treeExit] = await Promise.all([
+    new Response(treeProc.stdout).text(),
+    treeProc.exited,
+  ]);
+
+  if (treeExit === 0 && treeOut.trim()) {
+    const output = treeOut.trim();
+    const truncated = output.length > 5000 ? output.slice(0, 5000) + '\n... (truncated)' : output;
+    return `## Codebase Structure\n\n\`\`\`\n${truncated}\n\`\`\``;
+  }
+
+  const findProc = Bun.spawn(
+    ['find', '.', '-maxdepth', '2', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*', '-not', '-path', '*/.worktrees/*'],
+    { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
+  );
+  const [findOut] = await Promise.all([
+    new Response(findProc.stdout).text(),
+    findProc.exited,
+  ]);
+
+  const files = findOut.trim().split('\n').sort().join('\n');
+  return `## Codebase Structure\n\n\`\`\`\n${files}\n\`\`\``;
+}
+
 async function fileExistsAndRead(filePath: string): Promise<string | null> {
   const file = Bun.file(filePath);
   if (!(await file.exists())) return null;
@@ -407,8 +493,13 @@ export function buildRulesSection(issue: Issue, isRevision: boolean): string {
 export async function buildAgentPrompt(
   issue: Issue,
   worktreePath: string,
-  reviewFeedback?: string,
+  opts?: {
+    reviewFeedback?: string;
+    isFirstSession?: boolean;
+    codebaseSummary?: string;
+  },
 ): Promise<string> {
+  const { reviewFeedback, isFirstSession = true, codebaseSummary } = opts ?? {};
   const sections: string[] = [];
 
   // 1. Global prompt
@@ -419,10 +510,28 @@ export async function buildAgentPrompt(
   const claudeMd = await fileExistsAndRead(join(worktreePath, 'CLAUDE.md'));
   if (claudeMd) sections.push(claudeMd.trim());
 
-  // 3. Design doc from worktree
-  const designDocPath = join(worktreePath, issue.designPath);
-  const designDoc = await fileExistsAndRead(designDocPath);
-  if (designDoc) sections.push(designDoc.trim());
+  // 2.5. Codebase summary (if provided)
+  if (codebaseSummary) sections.push(codebaseSummary);
+
+  // 3. Design doc — full on first session, reference on continuations
+  if (issue.designPath) {
+    const designDocPath = join(worktreePath, issue.designPath);
+    if (isFirstSession) {
+      const designDoc = await fileExistsAndRead(designDocPath);
+      if (designDoc) sections.push(designDoc.trim());
+    } else {
+      const featuresExist = await Bun.file(join(worktreePath, '.agent-state', 'features.json')).exists();
+      if (featuresExist) {
+        sections.push(`## Design Document\n\nFull design at \`${issue.designPath}\`. Features extracted to \`.agent-state/features.json\`. Read the design doc only if you need to review the original requirements.`);
+      } else {
+        const designDoc = await fileExistsAndRead(designDocPath);
+        if (designDoc) sections.push(designDoc.trim());
+      }
+    }
+  } else {
+    // Designless task: use issue description as the spec
+    sections.push(`## Task Specification\n\n${issue.description}`);
+  }
 
   // 4. Issue context
   const contextLines: string[] = [
@@ -441,6 +550,82 @@ export async function buildAgentPrompt(
   sections.push(buildRulesSection(issue, !!reviewFeedback));
 
   return sections.join('\n\n---\n\n');
+}
+
+export interface AgentSignal {
+  status: 'blocked' | 'needs_clarification' | 'impossible';
+  reason: string;
+}
+
+const VALID_SIGNAL_STATUSES = ['blocked', 'needs_clarification', 'impossible'];
+
+export async function readAgentSignal(worktreePath: string): Promise<AgentSignal | null> {
+  const signalPath = join(worktreePath, '.agent-state', 'signal.json');
+  try {
+    const text = await Bun.file(signalPath).text();
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (
+      typeof parsed.status === 'string' &&
+      VALID_SIGNAL_STATUSES.includes(parsed.status) &&
+      typeof parsed.reason === 'string'
+    ) {
+      return { status: parsed.status as AgentSignal['status'], reason: parsed.reason };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function clearAgentSignal(worktreePath: string): Promise<void> {
+  const signalPath = join(worktreePath, '.agent-state', 'signal.json');
+  try {
+    const { unlink } = await import('node:fs/promises');
+    await unlink(signalPath);
+  } catch { /* ignore */ }
+}
+
+async function buildPreviousSessionSummary(runId: string, worktreePath: string): Promise<string | undefined> {
+  const parts: string[] = [];
+
+  // Recent git log from worktree
+  try {
+    const gitProc = Bun.spawn(
+      ['git', '-C', worktreePath, 'log', '--oneline', '-10'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const [gitOut] = await Promise.all([new Response(gitProc.stdout).text(), gitProc.exited]);
+    const gitLog = gitOut.trim();
+    if (gitLog) {
+      parts.push(`### Recent Commits\n\`\`\`\n${gitLog}\n\`\`\``);
+    }
+  } catch { /* ignore */ }
+
+  // Last 20 log entries from the buffer
+  const recentLogs = logBuffers.get(runId);
+  if (recentLogs && recentLogs.length > 0) {
+    const tail = recentLogs.slice(-20);
+    const logSummary = tail.map(e => `[${e.stream}] ${e.content}`).join('\n');
+    parts.push(`### Last Session Output (tail)\n\`\`\`\n${logSummary}\n\`\`\``);
+  }
+
+  return parts.length > 0 ? parts.join('\n\n') : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Spawn args builder
+// ---------------------------------------------------------------------------
+
+export function buildSpawnArgs(prompt: string, model?: string | null): string[] {
+  const args = [config.claudeCodePath, '--print', '--output-format', 'stream-json'];
+  if (config.logLevel === 'debug') {
+    args.push('--verbose');
+  }
+  if (model) {
+    args.push('--model', model);
+  }
+  args.push(prompt);
+  return args;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,9 +755,10 @@ async function buildFixPrompt(
   fixType: FixType,
   errorContext: string,
   attempt: number,
+  codebaseSummary?: string,
 ): Promise<string> {
   // Build the base prompt (global + CLAUDE.md + design doc + issue context)
-  const basePrompt = await buildAgentPrompt(issue, worktreePath);
+  const basePrompt = await buildAgentPrompt(issue, worktreePath, { codebaseSummary });
 
   const typeLabel = fixType === 'merge_conflict' ? 'Merge Conflict' : 'CI/CD Failure';
 
@@ -642,9 +828,20 @@ export async function executeRun(
     bufferLog(runId, 'system', `[runner] Worktree: ${worktreePath}`);
 
     await writeAgentSettings(worktreePath, project.allowedTools);
-    await initWorktree(worktreePath, project.init, runId, bufferLog);
+
+    let initFailure: string | null = null;
+    try {
+      await initWorktree(worktreePath, project.init, runId, bufferLog);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      initFailure = msg;
+      bufferLog(runId, 'system', `[runner] Init failed (non-blocking): ${msg}`);
+    }
 
     await setupAgentState(worktreePath);
+
+    const codebaseSummary = await generateCodebaseSummary(worktreePath);
+    bufferLog(runId, 'system', `[runner] Generated codebase summary (${codebaseSummary.length} chars)`);
 
     let completedSessions = 0;
 
@@ -667,11 +864,15 @@ export async function executeRun(
         errorContext = `Automatic rebase onto ${issue.baseBranch} failed. Conflict markers are present in the working tree.\n\n${rebaseResult.conflictOutput ?? ''}`;
       }
 
-      const fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt);
+      let fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt, codebaseSummary);
+      if (initFailure) {
+        fixPrompt += `\n\n## Warning: Dependency Install Failed\n\n\`${initFailure}\`\n\nRun the install command yourself before proceeding.`;
+      }
       bufferLog(runId, 'system', `[runner] Spawning claude agent for fix`);
 
+      const fixModel = project.fixModel ?? config.defaultFixModel ?? project.model ?? config.defaultModel;
       const agentProc = Bun.spawn(
-        [config.claudeCodePath, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', fixPrompt],
+        buildSpawnArgs(fixPrompt, fixModel),
         { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
       );
       updateRunStatus(runId, 'running', { agent_pid: agentProc.pid });
@@ -715,7 +916,7 @@ export async function executeRun(
           { stdout: 'pipe', stderr: 'pipe' },
         );
         const [ghOut] = await Promise.all([new Response(ghProc.stdout).text(), ghProc.exited]);
-        reviewFeedback = ghOut.trim() || undefined;
+        reviewFeedback = parseReviewFeedback(ghOut);
         prInstructions =
           `\n\n## PR Instructions\n\n` +
           `This is a revision of PR #${run.pr_number}. ` +
@@ -723,11 +924,9 @@ export async function executeRun(
           `Use \`gh pr review\` to understand reviewer feedback and address all requested changes.`;
       }
 
-      const basePrompt = (await buildAgentPrompt(issue, worktreePath, reviewFeedback)) + prInstructions;
-      const ctx: SessionPromptContext = { basePrompt, issueKey: issue.key };
-
       const runStartTime = Date.now();
       let isFirstRun = true;
+      let previousSummary: string | undefined;
 
       for (let iteration = 0; iteration < config.maxSessionIterations; iteration++) {
         const elapsed = Date.now() - runStartTime;
@@ -736,6 +935,21 @@ export async function executeRun(
           break;
         }
 
+        let sessionBase = await buildAgentPrompt(issue, worktreePath!, {
+          reviewFeedback: isFirstRun ? reviewFeedback : undefined,
+          isFirstSession: isFirstRun,
+          codebaseSummary,
+        });
+        if (isFirstRun && prInstructions) sessionBase += prInstructions;
+        if (isFirstRun && initFailure) {
+          sessionBase += `\n\n## Warning: Dependency Install Failed\n\n\`${initFailure}\`\n\nRun the install command yourself before proceeding.`;
+        }
+        const ctx: SessionPromptContext = {
+          basePrompt: sessionBase,
+          issueKey: issue.key,
+          previousSessionSummary: previousSummary,
+          hasDesignDoc: !!issue.designPath,
+        };
         const prompt = isFirstRun
           ? buildInitializerPrompt(ctx)
           : buildCodingPrompt(ctx);
@@ -743,8 +957,9 @@ export async function executeRun(
 
         bufferLog(runId, 'system', `[runner] Starting session ${iteration + 1}/${config.maxSessionIterations}`);
 
+        const runModel = project.model ?? config.defaultModel;
         const agentProc = Bun.spawn(
-          [config.claudeCodePath, '--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions', prompt],
+          buildSpawnArgs(prompt, runModel),
           { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
         );
 
@@ -776,12 +991,27 @@ export async function executeRun(
 
         broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: false });
 
+        // Check for agent signal
+        const signal = await readAgentSignal(worktreePath!);
+        if (signal) {
+          bufferLog(runId, 'system', `[runner] Agent signaled "${signal.status}": ${signal.reason}`);
+          commentOnIssue(issue.key, `Agent signaled **${signal.status}**: ${signal.reason}`);
+          await clearAgentSignal(worktreePath!);
+          if (signal.status === 'blocked' || signal.status === 'impossible') {
+            bufferLog(runId, 'system', `[runner] Breaking loop due to agent signal: ${signal.status}`);
+            break;
+          }
+        }
+
         const features = await readFeatureList(worktreePath!);
         if (isAllFeaturesDone(features)) {
           bufferLog(runId, 'system', `[runner] All features complete after ${completedSessions} session(s)`);
           broadcastSSE({ type: 'iteration', runId, current: completedSessions, max: config.maxSessionIterations, allDone: true });
           break;
         }
+
+        // Build previous session summary for next iteration
+        previousSummary = await buildPreviousSessionSummary(runId, worktreePath!);
 
         if (iteration < config.maxSessionIterations - 1) {
           bufferLog(runId, 'system', `[runner] Waiting ${config.autoContinueDelayMs}ms before next session`);
@@ -806,6 +1036,17 @@ export async function executeRun(
           pr_number: existingPR,
           completed_at: new Date().toISOString(),
         });
+        updateLinearStatus(issue.key, 'In Review');
+
+        if (run.is_revision) {
+          const conclusion = getAgentConclusion(runId);
+          const body = conclusion
+            ? `Reviewed the feedback — no changes needed.\n\n${conclusion}`
+            : `Reviewed the feedback — no changes were necessary.`;
+          commentOnPR(issue.repo, existingPR, body);
+          bufferLog(runId, 'system', `[runner] Posted review response on PR #${existingPR}`);
+        }
+
         const updatedRun = getRun(runId);
         if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
         return;
@@ -826,7 +1067,9 @@ export async function executeRun(
       prUrl = `https://github.com/${issue.repo}/pull/${run.pr_number}`;
       bufferLog(runId, 'system', `[runner] Updated existing PR: ${prUrl}`);
     } else {
-      let prBody = `Automated implementation for ${issue.key}.\n\nDesign: \`${issue.designPath}\``;
+      let prBody = issue.designPath
+        ? `Automated implementation for ${issue.key}.\n\nDesign: \`${issue.designPath}\``
+        : `Automated implementation for ${issue.key}.`;
 
       if (issue.parentKey) {
         const parentPR = getPRNumberByIssueKey(issue.parentKey);
@@ -1293,9 +1536,9 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
       try {
         const fixNeeded = checkFixNeeded(pr);
         if (!fixNeeded) {
-          // PR is healthy — clear any existing fix tracking
-          clearFixTracking(repo, pr.number, 'merge_conflict');
-          clearFixTracking(repo, pr.number, 'ci_failure');
+          // PR is healthy — delete fix tracking entirely
+          deleteFixTracking(repo, pr.number, 'merge_conflict');
+          deleteFixTracking(repo, pr.number, 'ci_failure');
           continue;
         }
 
@@ -1316,6 +1559,15 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
         const tracking = getFixTracking(repo, pr.number, fixType);
 
         if (tracking?.exhausted) continue;
+
+        // Cooldown: skip if this fix type was recently resolved
+        if (tracking?.resolved_at) {
+          const resolvedMs = new Date(tracking.resolved_at + 'Z').getTime();
+          const elapsed = Date.now() - resolvedMs;
+          if (elapsed < config.fixCooldownMs) {
+            continue;
+          }
+        }
 
         const currentAttempt = (tracking?.attempt_count ?? 0) + 1;
 

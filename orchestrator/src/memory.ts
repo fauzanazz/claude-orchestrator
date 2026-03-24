@@ -244,6 +244,24 @@ function parseGeminiJson(raw: string): unknown {
   }
 }
 
+function parseDelimitedDocs(raw: string): Record<string, string> {
+  const docs: Record<string, string> = {};
+  const parts = raw.split(/^<<<([^>]+)>>>$/m);
+  // parts: [preamble, filename1, content1, filename2, content2, ...]
+  for (let i = 1; i + 1 < parts.length; i += 2) {
+    const filename = parts[i]!.trim();
+    const content = parts[i + 1]!.replace(/^\n/, '').replace(/\n$/, '');
+    if (filename && content) {
+      docs[filename] = content;
+    }
+  }
+  if (Object.keys(docs).length === 0) {
+    const preview = raw.length > 500 ? raw.slice(0, 250) + '\n...\n' + raw.slice(-250) : raw;
+    throw new Error(`Failed to parse delimited docs response. Preview:\n${preview}`);
+  }
+  return docs;
+}
+
 async function callGeminiForDocs(
   run: Run,
   issue: Issue,
@@ -289,15 +307,36 @@ Update the documentation files with information from this run. Rules:
 - If a doc already has good content for a section, leave it unchanged
 - Use wikilinks ([[PageName]]) for cross-references
 
-Return a JSON object where keys are filenames (e.g. "Features.md") and values are the COMPLETE updated file content (including frontmatter). Only include files that actually changed.
+Return ONLY the files that actually changed, using this exact delimiter format:
 
-Return ONLY valid JSON, no markdown fences.`;
+<<<FILENAME>>>
+(complete updated file content including frontmatter)
+
+For example:
+<<<Features.md>>>
+---
+type: documentation
+---
+# Features
+...content...
+
+<<<Modules.md>>>
+---
+type: documentation
+---
+# Modules
+...content...
+
+Rules for the output format:
+- Each file starts with <<<Filename.md>>> on its own line
+- The file content follows immediately on the next line
+- Do NOT wrap output in code fences or JSON
+- Only include files that actually changed`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.0-flash',
     contents: prompt,
     config: {
-      responseMimeType: 'application/json',
       maxOutputTokens: 65536,
     },
   });
@@ -310,7 +349,7 @@ Return ONLY valid JSON, no markdown fences.`;
   const text = response.text;
   if (!text) throw new Error('Gemini docs response empty');
 
-  return parseGeminiJson(text) as Record<string, string>;
+  return parseDelimitedDocs(text);
 }
 
 async function updateProjectDocs(

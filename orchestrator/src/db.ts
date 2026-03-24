@@ -90,10 +90,14 @@ db.run(`
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_run_id   TEXT REFERENCES runs(id),
     exhausted     INTEGER NOT NULL DEFAULT 0,
+    resolved_at   TEXT,
     updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (repo, pr_number, fix_type)
   );
 `);
+
+// Migration: add resolved_at column to fix_tracking
+try { db.run('ALTER TABLE fix_tracking ADD COLUMN resolved_at TEXT'); } catch {}
 
 // Migration: add iterations column
 try {
@@ -181,13 +185,13 @@ export function insertRun(
 }
 
 export function getIssueForRun(run: Run): Issue | null {
-  if (!run.design_path || !run.issue_repo || !run.base_branch) return null;
+  if (!run.issue_repo || !run.base_branch) return null;
   return {
     id: run.issue_id,
     key: run.issue_key,
     title: run.issue_title,
     description: '', // not needed for execution
-    designPath: run.design_path,
+    designPath: run.design_path ?? null,
     branch: run.branch,
     repo: run.issue_repo,
     baseBranch: run.base_branch,
@@ -368,6 +372,10 @@ const stmtGetFixTracking = db.prepare<FixTracking, [string, number, string]>(
 );
 
 const stmtClearFixTracking = db.prepare<void, [string, number, string]>(
+  `UPDATE fix_tracking SET attempt_count = 0, resolved_at = datetime('now'), updated_at = datetime('now') WHERE repo = ? AND pr_number = ? AND fix_type = ?`
+);
+
+const stmtDeleteFixTracking = db.prepare<void, [string, number, string]>(
   `DELETE FROM fix_tracking WHERE repo = ? AND pr_number = ? AND fix_type = ?`
 );
 
@@ -403,6 +411,10 @@ export function markFixExhausted(repo: string, prNumber: number, fixType: string
 
 export function clearFixTracking(repo: string, prNumber: number, fixType: string): void {
   stmtClearFixTracking.run(repo, prNumber, fixType);
+}
+
+export function deleteFixTracking(repo: string, prNumber: number, fixType: string): void {
+  stmtDeleteFixTracking.run(repo, prNumber, fixType);
 }
 
 const stmtGetPRByIssueKey = db.prepare<{ pr_number: number } | null, [string]>(`

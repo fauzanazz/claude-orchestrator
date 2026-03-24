@@ -29,12 +29,62 @@ describe('buildInitializerPrompt', () => {
   });
 });
 
+describe('buildInitializerPrompt — hasDesignDoc', () => {
+  test('references design document when hasDesignDoc is true', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1', hasDesignDoc: true };
+    const result = buildInitializerPrompt(ctx);
+    expect(result).toContain('the design document');
+  });
+
+  test('references task specification when hasDesignDoc is false', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1', hasDesignDoc: false };
+    const result = buildInitializerPrompt(ctx);
+    expect(result).toContain('the task specification');
+  });
+
+  test('includes signal.json instructions', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1' };
+    const result = buildInitializerPrompt(ctx);
+    expect(result).toContain('signal.json');
+  });
+});
+
 describe('buildCodingPrompt', () => {
   test('contains base prompt and Session Mode: Coding', () => {
     const ctx: SessionPromptContext = { basePrompt: 'BASE PROMPT CONTENT', issueKey: 'FAU-1' };
     const result = buildCodingPrompt(ctx);
     expect(result).toContain('BASE PROMPT CONTENT');
     expect(result).toContain('Session Mode: Coding (Continuation)');
+  });
+
+  test('includes previous session summary when provided', () => {
+    const ctx: SessionPromptContext = {
+      basePrompt: 'BASE',
+      issueKey: 'FAU-1',
+      previousSessionSummary: '### Recent Commits\nfeat: add something',
+    };
+    const result = buildCodingPrompt(ctx);
+    expect(result).toContain('Previous Session Context');
+    expect(result).toContain('Recent Commits');
+    expect(result).toContain('feat: add something');
+  });
+
+  test('omits previous session section when not provided', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1' };
+    const result = buildCodingPrompt(ctx);
+    expect(result).not.toContain('Previous Session Context');
+  });
+
+  test('does not say "NO memory" — replaced with context-aware message', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1' };
+    const result = buildCodingPrompt(ctx);
+    expect(result).not.toContain('You have NO memory');
+  });
+
+  test('includes signal.json instructions', () => {
+    const ctx: SessionPromptContext = { basePrompt: 'BASE', issueKey: 'FAU-1' };
+    const result = buildCodingPrompt(ctx);
+    expect(result).toContain('signal.json');
   });
 });
 

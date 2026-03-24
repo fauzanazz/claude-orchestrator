@@ -31,6 +31,9 @@ export const config = {
   githubUsername: required.GITHUB_USERNAME as string,
 
   claudeCodePath: process.env.CLAUDE_CODE_PATH ?? 'claude',
+  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
+  defaultModel: process.env.DEFAULT_MODEL ?? null as string | null,
+  defaultFixModel: process.env.DEFAULT_FIX_MODEL ?? null as string | null,
   maxConcurrentAgents: parseIntEnv('MAX_CONCURRENT_AGENTS', 2),
   agentTimeoutMs: parseIntEnv('AGENT_TIMEOUT_MS', 7200000),
   maxSessionIterations: parseIntEnv('MAX_SESSION_ITERATIONS', 10),
@@ -57,6 +60,7 @@ export const config = {
   maxRunRetries: parseIntEnv('MAX_RUN_RETRIES', 3),
   runRetryDelayMs: parseIntEnv('RUN_RETRY_DELAY_MS', 30000),
   fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
+  fixCooldownMs: parseIntEnv('FIX_COOLDOWN_MS', 300000),
 
   logRetentionDays: parseIntEnv('LOG_RETENTION_DAYS', 30),
   runRetentionDays: parseIntEnv('RUN_RETENTION_DAYS', 90),

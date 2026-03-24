@@ -14,6 +14,8 @@ export interface ProjectConfig {
   description?: string;
   allowedTools?: string[];  // Claude Code tool/command patterns for settings.json allow list
   linearProject?: string;
+  model?: string;       // Default model for normal runs (e.g., "claude-sonnet-4-20250514")
+  fixModel?: string;    // Model for fix runs (cheaper model for simple fixes)
 }
 
 // Projects registry (keyed by project name)
@@ -35,9 +37,9 @@ export interface LinearIssue {
 
 // Parsed issue metadata (extracted from description field)
 export interface ParsedIssueMetadata {
-  designPath: string; // e.g. "docs/designs/rate-limit-middleware.md"
-  branch: string;     // e.g. "agent/rate-limit-middleware"
-  repo: string;       // e.g. "belle/legalipro"
+  designPath: string | null; // e.g. "docs/designs/rate-limit-middleware.md" or null for designless tasks
+  branch: string;            // e.g. "agent/rate-limit-middleware"
+  repo: string;              // e.g. "belle/legalipro"
 }
 
 // Issue with parsed metadata
@@ -114,6 +116,7 @@ export interface FixTracking {
   attempt_count: number;
   last_run_id: string | null;
   exhausted: number;             // 0 or 1
+  resolved_at: string | null;
   updated_at: string;
 }
 

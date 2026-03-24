@@ -1,4 +1,12 @@
 {
+  "avv": {
+    "path": "/Users/enjat/Github/avv",
+    "repo": "fauzanazz/avv",
+    "baseBranch": "main",
+    "linearTeam": "FAU",
+    "linearProfile": "",
+    "linearProject": "AVV"
+  },
   "artful-diary": {
     "path": "/Users/enjat/Github/artful-diary",
     "repo": "fauzanazz/artful-diary",

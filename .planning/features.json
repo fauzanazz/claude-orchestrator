@@ -1,0 +1,74 @@
+[
+  {
+    "name": "fix-dangerously-skip-permissions",
+    "description": "Remove --dangerously-skip-permissions flag and let .claude/settings.json permissions actually work",
+    "severity": "critical",
+    "passes": true
+  },
+  {
+    "name": "inject-previous-session-context",
+    "description": "Feed continuation agents their previous session output (last log entries, test results, git log) instead of relying solely on .agent-state files",
+    "severity": "critical",
+    "passes": true
+  },
+  {
+    "name": "clean-review-feedback",
+    "description": "Parse and format raw gh JSON review feedback into clean markdown before injecting into agent prompt",
+    "severity": "critical",
+    "passes": true
+  },
+  {
+    "name": "add-codebase-summary",
+    "description": "Generate a codebase summary (tree + key files) during worktree setup and inject into initializer prompt",
+    "severity": "high",
+    "passes": true
+  },
+  {
+    "name": "conditional-design-doc",
+    "description": "Only inject full design doc on session 1; continuations get features.json + progress.md + design doc path reference",
+    "severity": "high",
+    "passes": true
+  },
+  {
+    "name": "gate-verbose-flag",
+    "description": "Only use --verbose when LOG_LEVEL=debug is set; default to non-verbose for production runs",
+    "severity": "high",
+    "passes": true
+  },
+  {
+    "name": "agent-feedback-channel",
+    "description": "Add .agent-state/signal.json support so agents can signal blocked/needs-clarification status to the orchestrator between sessions",
+    "severity": "high",
+    "passes": true
+  },
+  {
+    "name": "trim-global-prompt",
+    "description": "Remove redundant instructions from global-prompt.md that Claude already follows by default",
+    "severity": "medium",
+    "passes": true
+  },
+  {
+    "name": "support-designless-tasks",
+    "description": "Allow tasks driven by Linear issue description alone without requiring docs/designs/*.md",
+    "severity": "medium",
+    "passes": true
+  },
+  {
+    "name": "pre-warm-codebase-context",
+    "description": "Use CLAUDE.md project summary + tree output as injected context so agent doesn't explore blind",
+    "severity": "medium",
+    "passes": true
+  },
+  {
+    "name": "model-selection-per-project",
+    "description": "Add model field to ProjectConfig and pass --model flag to claude CLI for per-project/per-run-type model selection",
+    "severity": "medium",
+    "passes": true
+  },
+  {
+    "name": "trim-review-feedback-tokens",
+    "description": "Extract only reviewer name, comment body, and file paths from review JSON instead of dumping raw metadata",
+    "severity": "medium",
+    "passes": true
+  }
+]

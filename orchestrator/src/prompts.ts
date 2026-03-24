@@ -9,9 +9,15 @@ export interface FeatureEntry {
 export interface SessionPromptContext {
   basePrompt: string;
   issueKey: string;
+  previousSessionSummary?: string;
+  hasDesignDoc?: boolean;
 }
 
 export function buildInitializerPrompt(ctx: SessionPromptContext): string {
+  const taskSource = ctx.hasDesignDoc !== false
+    ? 'the design document'
+    : 'the task specification';
+
   return ctx.basePrompt + `
 
 ---
@@ -22,7 +28,7 @@ This is your FIRST session on this task. You have never seen this codebase befor
 
 Follow these steps in order:
 
-1. **Read the design document** above carefully. Understand every requirement.
+1. **Read ${taskSource}** above carefully. Understand every requirement.
 2. **Explore the codebase** — read the project structure, key files, and existing patterns.
 3. **Create \`.agent-state/features.json\`** with this exact structure:
    \`\`\`json
@@ -31,7 +37,7 @@ Follow these steps in order:
      ...
    ]
    \`\`\`
-   Extract each distinct requirement from the design document as a separate feature entry.
+   Extract each distinct requirement from ${taskSource} as a separate feature entry.
 4. **Start implementing** — pick the first feature(s) and write the code.
 5. **Run tests** to verify your changes work and don't break existing functionality.
 6. **Commit your work** with conventional commit messages referencing the issue key.
@@ -40,11 +46,27 @@ Follow these steps in order:
    - What you accomplished
    - What's left to do
    - Any decisions made or blockers encountered
+9. **If you are blocked or need clarification**, create \`.agent-state/signal.json\`:
+   \`\`\`json
+   { "status": "blocked", "reason": "Description of what's blocking you" }
+   \`\`\`
+   Valid statuses: "blocked", "needs_clarification", "impossible"
 
 Do as much as you can in this session. The next session will pick up where you left off.`;
 }
 
 export function buildCodingPrompt(ctx: SessionPromptContext): string {
+  let summarySection = '';
+  if (ctx.previousSessionSummary) {
+    summarySection = `
+
+## Previous Session Context
+
+${ctx.previousSessionSummary}
+
+`;
+  }
+
   return ctx.basePrompt + `
 
 ---
@@ -52,8 +74,8 @@ export function buildCodingPrompt(ctx: SessionPromptContext): string {
 ## Session Mode: Coding (Continuation)
 
 This is a CONTINUATION session. Previous session(s) already worked on this task.
-You have NO memory of previous sessions — all context is in the files below.
-
+The orchestrator captured key context from the previous session below. Use \`.agent-state/\` files for full details.
+${summarySection}
 Follow these steps in order:
 
 1. **Read \`.agent-state/features.json\`** to see which features are done (\`passes: true\`) and which remain.
@@ -67,6 +89,11 @@ Follow these steps in order:
    - What you accomplished this session
    - What's left to do
    - Any decisions made or blockers encountered
+9. **If you are blocked or need clarification**, create \`.agent-state/signal.json\`:
+   \`\`\`json
+   { "status": "blocked", "reason": "Description of what's blocking you" }
+   \`\`\`
+   Valid statuses: "blocked", "needs_clarification", "impossible"
 
 Do as much as you can in this session. If features remain, another session will continue after you.`;
 }
