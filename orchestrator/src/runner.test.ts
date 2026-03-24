@@ -25,9 +25,9 @@ describe('buildSpawnArgs', () => {
     expect(args[args.length - 1]).toBe('test prompt');
   });
 
-  test('does not include --verbose by default (LOG_LEVEL not debug)', () => {
+  test('always includes --verbose (required by stream-json output format)', () => {
     const args = buildSpawnArgs('prompt');
-    expect(args).not.toContain('--verbose');
+    expect(args).toContain('--verbose');
   });
 
   test('does not include --dangerously-skip-permissions', () => {

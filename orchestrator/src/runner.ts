@@ -23,6 +23,7 @@ import {
   getRunByPRNumber,
   getIssueForRun,
   getPRNumberByIssueKey,
+  getSiblingOpenPRRuns,
   deleteOldLogs,
   deleteOldRuns,
   deleteOldProcessedReviews,
@@ -139,6 +140,33 @@ async function runLineark(args: string[]): Promise<string> {
   return rawOut;
 }
 
+// lineark doesn't include the parent field in `issues read` output, so we
+// query the Linear GraphQL API directly to resolve parent relationships.
+async function fetchLinearParent(issueId: string): Promise<{ id: string; identifier: string } | null> {
+  const tokenPath = join(process.env.HOME ?? '~', '.linear_api_token');
+  let token: string;
+  try {
+    token = readFileSync(tokenPath, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+
+  try {
+    const resp = await fetch('https://api.linear.app/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: token },
+      body: JSON.stringify({
+        query: `{ issue(id: "${issueId}") { parent { id identifier } } }`,
+      }),
+    });
+    const json = await resp.json() as { data?: { issue?: { parent?: { id: string; identifier: string } | null } } };
+    return json.data?.issue?.parent ?? null;
+  } catch (err) {
+    console.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
 export async function pollLinear(): Promise<LinearIssue[]> {
   // Step 1: List issues (lean output — has identifier + state but no id/description)
   const listOut = await runLineark(['issues', 'list', '--format', 'json']);
@@ -187,7 +215,8 @@ export async function pollLinear(): Promise<LinearIssue[]> {
         continue;
       }
 
-      const parent = full.parent as { id: string; identifier: string } | null | undefined;
+      // lineark doesn't return parent — fetch from Linear API directly
+      const parent = await fetchLinearParent(full.id);
       if (parent?.identifier) {
         const done = await isParentDone(parent.identifier);
         if (!done) {
@@ -380,7 +409,7 @@ export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
     throw new Error(`Project not found for repo: ${meta.repo}`);
   }
 
-  const parent = linearIssue.parent as { id: string; identifier: string } | null | undefined;
+  const parent = await fetchLinearParent(linearIssue.id);
 
   return {
     id: linearIssue.id,
@@ -617,10 +646,8 @@ async function buildPreviousSessionSummary(runId: string, worktreePath: string):
 // ---------------------------------------------------------------------------
 
 export function buildSpawnArgs(prompt: string, model?: string | null): string[] {
-  const args = [config.claudeCodePath, '--print', '--output-format', 'stream-json'];
-  if (config.logLevel === 'debug') {
-    args.push('--verbose');
-  }
+  // --verbose is required by claude CLI when using --output-format stream-json
+  const args = [config.claudeCodePath, '--print', '--verbose', '--output-format', 'stream-json'];
   if (model) {
     args.push('--model', model);
   }
@@ -1465,6 +1492,10 @@ export async function pollReviews(): Promise<void> {
         updateRunStatus(run.id, 'merged');
         updateLinearStatus(run.issue_key, 'Done');
         console.log(`[reviewer] PR #${run.pr_number} merged — marked ${run.issue_key} as Done`);
+        // Proactively rebase sibling PRs to prevent conflict cascade
+        proactiveRebaseSiblings(run).catch((err) =>
+          console.error(`[rebase] Error rebasing siblings after ${run.issue_key} merge:`, err),
+        );
         continue;
       }
       if (prData.state === 'CLOSED') {
@@ -1520,6 +1551,52 @@ export async function pollReviews(): Promise<void> {
       }
     } catch (err) {
       console.error(`[reviewer] Error checking PR for run ${run.id}:`, err);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Proactive rebase: after a PR merges, rebase all sibling PRs in the same
+// project to prevent the conflict cascade.
+// ---------------------------------------------------------------------------
+
+async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
+  const siblings = getSiblingOpenPRRuns(mergedRun.project, mergedRun.issue_key);
+  if (siblings.length === 0) return;
+
+  const resolved = resolveProject(mergedRun.issue_repo ?? '');
+  if (!resolved) return;
+
+  const baseBranch = mergedRun.base_branch ?? resolved.project.baseBranch;
+
+  console.log(
+    `[rebase] PR #${mergedRun.pr_number} merged in ${mergedRun.project} — ` +
+    `proactively rebasing ${siblings.length} sibling PR(s)`,
+  );
+
+  for (const sibling of siblings) {
+    try {
+      const projectPath = await ensureProjectLocal(resolved.project, resolved.key);
+      const slug = ulid().slice(-6).toLowerCase();
+      const worktreePath = await setupWorktree(projectPath, sibling.branch, sibling.issue_key, slug);
+
+      try {
+        const result = await rebaseOnto(worktreePath, baseBranch);
+        if (result.success) {
+          await forcePushFromWorktree(worktreePath, sibling.branch);
+          console.log(`[rebase] Auto-rebased PR #${sibling.pr_number} (${sibling.issue_key}) onto ${baseBranch}`);
+        } else {
+          console.log(`[rebase] PR #${sibling.pr_number} (${sibling.issue_key}) has real conflicts — skipping (fixer will handle)`);
+          await abortRebase(worktreePath);
+        }
+      } finally {
+        cleanupWorktree(projectPath, worktreePath).catch(() => {});
+      }
+    } catch (err) {
+      console.warn(
+        `[rebase] Failed to proactively rebase PR #${sibling.pr_number} (${sibling.issue_key}): ` +
+        `${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 }
@@ -1673,7 +1750,7 @@ export function startRunner(): void {
           branch: meta.branch,
           repo: meta.repo,
           baseBranch: resolved.project.baseBranch,
-          parentKey: (linearIssue as any).parent?.identifier ?? null,
+          parentKey: linearIssue.parent?.identifier ?? null,
         };
 
         const worktreePath = join(
