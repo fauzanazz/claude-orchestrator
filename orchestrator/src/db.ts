@@ -579,6 +579,138 @@ export function getSiblingOpenPRRuns(project: string, excludeIssueKey: string): 
   `).all(project, excludeIssueKey);
 }
 
+// ---------------------------------------------------------------------------
+// Analytics queries
+// ---------------------------------------------------------------------------
+
+interface AnalyticsOverview {
+  total_runs: number;
+  success_count: number;
+  failed_count: number;
+  success_rate: number;
+  avg_duration_seconds: number;
+  avg_iterations: number;
+  retry_rate: number;
+}
+
+interface ProjectStats {
+  project: string;
+  total_runs: number;
+  success_count: number;
+  failed_count: number;
+  success_rate: number;
+  avg_duration_seconds: number;
+  avg_iterations: number;
+}
+
+interface DailyThroughput {
+  date: string;
+  total: number;
+  success: number;
+  failed: number;
+}
+
+interface FailureBreakdown {
+  category: string;
+  count: number;
+}
+
+export function getAnalyticsOverview(days: number): AnalyticsOverview {
+  const row = db.prepare<{
+    total_runs: number;
+    success_count: number;
+    failed_count: number;
+    avg_duration: number | null;
+    avg_iterations: number | null;
+    retry_count: number;
+  }, [number]>(`
+    SELECT
+      COUNT(*) as total_runs,
+      SUM(CASE WHEN status IN ('success', 'merged') THEN 1 ELSE 0 END) as success_count,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+      AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL
+          THEN (julianday(completed_at) - julianday(started_at)) * 86400
+          ELSE NULL END) as avg_duration,
+      AVG(iterations) as avg_iterations,
+      SUM(CASE WHEN retry_attempt > 0 THEN 1 ELSE 0 END) as retry_count
+    FROM runs
+    WHERE created_at >= datetime('now', '-' || ? || ' days')
+      AND is_fix = 0
+  `).get(days);
+
+  if (!row) return { total_runs: 0, success_count: 0, failed_count: 0, success_rate: 0, avg_duration_seconds: 0, avg_iterations: 0, retry_rate: 0 };
+
+  return {
+    total_runs: row.total_runs,
+    success_count: row.success_count,
+    failed_count: row.failed_count,
+    success_rate: row.total_runs > 0 ? Math.round((row.success_count / row.total_runs) * 100) : 0,
+    avg_duration_seconds: Math.round(row.avg_duration ?? 0),
+    avg_iterations: Math.round((row.avg_iterations ?? 0) * 10) / 10,
+    retry_rate: row.total_runs > 0 ? Math.round((row.retry_count / row.total_runs) * 100) : 0,
+  };
+}
+
+export function getProjectStats(days: number): ProjectStats[] {
+  return db.prepare<ProjectStats, [number]>(`
+    SELECT
+      project,
+      COUNT(*) as total_runs,
+      SUM(CASE WHEN status IN ('success', 'merged') THEN 1 ELSE 0 END) as success_count,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+      ROUND(AVG(CASE WHEN status IN ('success', 'merged') THEN 100.0 ELSE 0 END), 1) as success_rate,
+      ROUND(AVG(CASE WHEN completed_at IS NOT NULL AND started_at IS NOT NULL
+          THEN (julianday(completed_at) - julianday(started_at)) * 86400
+          ELSE NULL END)) as avg_duration_seconds,
+      ROUND(AVG(iterations), 1) as avg_iterations
+    FROM runs
+    WHERE created_at >= datetime('now', '-' || ? || ' days')
+      AND is_fix = 0
+    GROUP BY project
+    ORDER BY total_runs DESC
+  `).all(days);
+}
+
+export function getDailyThroughput(days: number): DailyThroughput[] {
+  return db.prepare<DailyThroughput, [number]>(`
+    SELECT
+      date(created_at) as date,
+      COUNT(*) as total,
+      SUM(CASE WHEN status IN ('success', 'merged') THEN 1 ELSE 0 END) as success,
+      SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+    FROM runs
+    WHERE created_at >= datetime('now', '-' || ? || ' days')
+      AND is_fix = 0
+    GROUP BY date(created_at)
+    ORDER BY date ASC
+  `).all(days);
+}
+
+export function getFailureBreakdown(days: number, project?: string): FailureBreakdown[] {
+  const whereProject = project ? ' AND project = ?' : '';
+  const params: (number | string)[] = project ? [days, project] : [days];
+  return db.prepare<FailureBreakdown, (number | string)[]>(`
+    SELECT
+      CASE
+        WHEN error_summary LIKE '%timed out%' THEN 'Timeout'
+        WHEN error_summary LIKE '%No commits%' THEN 'No commits produced'
+        WHEN error_summary LIKE '%Queue full%' THEN 'Queue full'
+        WHEN error_summary LIKE '%duplicate%' THEN 'Duplicate run'
+        WHEN error_summary LIKE '%restarted%' THEN 'Orchestrator restart'
+        WHEN error_summary LIKE '%non-retryable%' OR error_summary LIKE '%Non-retryable%' THEN 'Non-retryable error'
+        ELSE 'Other'
+      END as category,
+      COUNT(*) as count
+    FROM runs
+    WHERE status = 'failed'
+      AND created_at >= datetime('now', '-' || ? || ' days')
+      AND is_fix = 0
+      ${whereProject}
+    GROUP BY category
+    ORDER BY count DESC
+  `).all(...(params as [number, ...string[]]));
+}
+
 export function getRunByPRNumber(prNumber: number, projectKey?: string): Run | null {
   // Find the original (non-fix, non-revision) run that created this PR
   if (projectKey) {

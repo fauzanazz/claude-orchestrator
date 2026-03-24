@@ -8,6 +8,7 @@ import {
   parseIssueMetadata,
   buildRetryContext,
   logBuffers,
+  chunkArray,
 } from './runner.ts';
 import type { Run } from './types.ts';
 
@@ -336,5 +337,22 @@ describe('buildRetryContext', () => {
     } as Run;
     const context = buildRetryContext(failedRun);
     expect(context).toContain('**Previous attempt**: 2');
+  }
+       
+// ---------------------------------------------------------------------------
+// chunkArray
+// ---------------------------------------------------------------------------
+
+describe('chunkArray', () => {
+  test('splits array into chunks of specified size', () => {
+    expect(chunkArray([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+  });
+
+  test('returns single chunk if array is smaller than size', () => {
+    expect(chunkArray([1, 2], 5)).toEqual([[1, 2]]);
+  });
+
+  test('returns empty array for empty input', () => {
+    expect(chunkArray([], 3)).toEqual([]);
   });
 });
