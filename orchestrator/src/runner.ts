@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { monotonicFactory } from 'ulid';
 import { config } from './config.ts';
-import { documentRun } from './memory.ts';
+import { documentRun, readProjectMemory } from './memory.ts';
 import {
   insertRun,
   insertLog,
@@ -526,9 +526,10 @@ export async function buildAgentPrompt(
     reviewFeedback?: string;
     isFirstSession?: boolean;
     codebaseSummary?: string;
+    projectKey?: string;
   },
 ): Promise<string> {
-  const { reviewFeedback, isFirstSession = true, codebaseSummary } = opts ?? {};
+  const { reviewFeedback, isFirstSession = true, codebaseSummary, projectKey } = opts ?? {};
   const sections: string[] = [];
 
   // 1. Global prompt
@@ -541,6 +542,19 @@ export async function buildAgentPrompt(
 
   // 2.5. Codebase summary (if provided)
   if (codebaseSummary) sections.push(codebaseSummary);
+
+  // 2.7. Project memory — inject on first session only
+  if (isFirstSession && projectKey) {
+    try {
+      const memory = await readProjectMemory(projectKey, {
+        issueTitle: issue.title,
+        issueKey: issue.key,
+      });
+      if (memory) sections.push(memory);
+    } catch (err) {
+      console.warn(`[runner] Memory injection failed for ${projectKey}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 
   // 3. Design doc — full on first session, reference on continuations
   if (issue.designPath) {
@@ -783,9 +797,10 @@ async function buildFixPrompt(
   errorContext: string,
   attempt: number,
   codebaseSummary?: string,
+  projectKey?: string,
 ): Promise<string> {
   // Build the base prompt (global + CLAUDE.md + design doc + issue context)
-  const basePrompt = await buildAgentPrompt(issue, worktreePath, { codebaseSummary });
+  const basePrompt = await buildAgentPrompt(issue, worktreePath, { codebaseSummary, projectKey });
 
   const typeLabel = fixType === 'merge_conflict' ? 'Merge Conflict' : 'CI/CD Failure';
 
@@ -891,7 +906,7 @@ export async function executeRun(
         errorContext = `Automatic rebase onto ${issue.baseBranch} failed. Conflict markers are present in the working tree.\n\n${rebaseResult.conflictOutput ?? ''}`;
       }
 
-      let fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt, codebaseSummary);
+      let fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt, codebaseSummary, projectKey);
       if (initFailure) {
         fixPrompt += `\n\n## Warning: Dependency Install Failed\n\n\`${initFailure}\`\n\nRun the install command yourself before proceeding.`;
       }
@@ -966,6 +981,7 @@ export async function executeRun(
           reviewFeedback: isFirstRun ? reviewFeedback : undefined,
           isFirstSession: isFirstRun,
           codebaseSummary,
+          projectKey,
         });
         if (isFirstRun && prInstructions) sessionBase += prInstructions;
         if (isFirstRun && initFailure) {

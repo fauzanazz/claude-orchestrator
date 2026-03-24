@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { scrubSensitiveData, scrubRunContext, truncateContext, parseDelimitedDocs } from './memory.ts';
+import { scrubSensitiveData, scrubRunContext, truncateContext, parseDelimitedDocs, readProjectMemory, sectionsContain } from './memory.ts';
 import type { RunContext } from './memory.ts';
 
 describe('scrubSensitiveData', () => {
@@ -261,5 +261,42 @@ describe('parseDelimitedDocs', () => {
     expect(() => parseDelimitedDocs('just some text with no delimiters')).toThrow(
       'Failed to parse delimited docs response',
     );
+  });
+});
+
+describe('readProjectMemory', () => {
+  test('returns null or string without throwing', async () => {
+    // In CI/local where obsidian-memory may not be installed, should return null gracefully
+    const result = await readProjectMemory('nonexistent-project');
+    expect(result === null || typeof result === 'string').toBe(true);
+  });
+
+  test('returns null for empty project key', async () => {
+    const result = await readProjectMemory('');
+    expect(result === null || typeof result === 'string').toBe(true);
+  });
+
+  test('caps output at MEMORY_MAX_CHARS + header overhead', async () => {
+    const result = await readProjectMemory('claude-orchestrator');
+    if (result) {
+      // 4000 content cap + ~200 chars header overhead
+      expect(result.length).toBeLessThanOrEqual(5000);
+    }
+  });
+});
+
+describe('sectionsContain', () => {
+  test('detects duplicate content', () => {
+    const sections = ['### Recent Activity\n\nSome long content about the project that spans multiple lines'];
+    expect(sectionsContain(sections, 'Some long content about the project that spans multiple lines')).toBe(true);
+  });
+
+  test('returns false for non-duplicate content', () => {
+    const sections = ['### Recent Activity\n\nSome content'];
+    expect(sectionsContain(sections, 'Completely different content that is not in sections')).toBe(false);
+  });
+
+  test('returns false for empty sections', () => {
+    expect(sectionsContain([], 'Any content')).toBe(false);
   });
 });

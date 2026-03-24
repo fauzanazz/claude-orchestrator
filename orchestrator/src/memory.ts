@@ -398,6 +398,80 @@ async function updateProjectDocs(
 }
 
 // ---------------------------------------------------------------------------
+// Memory read-side: inject past context into agent prompts
+// ---------------------------------------------------------------------------
+
+const MEMORY_MAX_CHARS = 4000;
+
+/**
+ * Read relevant project memory from Obsidian for injection into agent prompts.
+ * Returns a formatted markdown section, or null if no relevant memory found.
+ */
+export async function readProjectMemory(
+  projectKey: string,
+  opts?: { issueTitle?: string; issueKey?: string },
+): Promise<string | null> {
+  // Check obsidian-memory availability
+  try {
+    await $`which obsidian-memory`.quiet();
+  } catch {
+    return null;
+  }
+
+  const sections: string[] = [];
+  let totalChars = 0;
+
+  // 1. Search for recent sessions mentioning this project
+  try {
+    const result = await $`obsidian-memory search ${projectKey}`.quiet().text();
+    const trimmed = result.trim();
+    if (trimmed.length > 50) {
+      const truncated = trimmed.slice(0, Math.floor(MEMORY_MAX_CHARS * 0.6));
+      sections.push(`### Recent Activity for "${projectKey}"\n\n${truncated}`);
+      totalChars += truncated.length;
+    }
+  } catch {
+    // obsidian-memory search failed — continue without project context
+  }
+
+  // 2. Search for issue-specific context if provided
+  if (opts?.issueTitle && totalChars < MEMORY_MAX_CHARS) {
+    try {
+      const remaining = MEMORY_MAX_CHARS - totalChars;
+      const query = opts.issueTitle.slice(0, 80); // Truncate long titles for search
+      const result = await $`obsidian-memory search ${query}`.quiet().text();
+      const trimmed = result.trim();
+      if (trimmed.length > 50 && !sectionsContain(sections, trimmed)) {
+        const truncated = trimmed.slice(0, Math.min(trimmed.length, remaining));
+        sections.push(`### Related Context\n\n${truncated}`);
+        totalChars += truncated.length;
+      }
+    } catch {
+      // Search failed — continue without issue context
+    }
+  }
+
+  if (sections.length === 0) return null;
+
+  return [
+    '## Project Memory (from past agent sessions)',
+    '',
+    'The following context was gathered from previous agent sessions working on this project.',
+    'Use it to avoid re-discovering patterns, conventions, and project structure.',
+    '',
+    ...sections,
+  ].join('\n');
+}
+
+/**
+ * Check if any existing section already contains the new content (dedup).
+ */
+export function sectionsContain(sections: string[], newContent: string): boolean {
+  const sample = newContent.slice(0, 200);
+  return sections.some((s) => s.includes(sample));
+}
+
+// ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
 
