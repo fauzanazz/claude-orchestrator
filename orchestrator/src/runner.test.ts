@@ -337,8 +337,9 @@ describe('buildRetryContext', () => {
     } as Run;
     const context = buildRetryContext(failedRun);
     expect(context).toContain('**Previous attempt**: 2');
-  }
-       
+  });
+});
+
 // ---------------------------------------------------------------------------
 // chunkArray
 // ---------------------------------------------------------------------------
