@@ -1249,23 +1249,29 @@ export async function executeRun(
         );
 
         if (!reviewResult.pass && prNum) {
-          // Post review feedback as PR comment — await so comment exists before revision reads it
+          // Post review feedback as PR comment — must succeed before revision reads it
           const feedback = formatReviewFeedback(reviewResult);
           const commentProc = Bun.spawn(
             ['gh', 'pr', 'comment', String(prNum), '--repo', issue.repo, '--body', `### AI Auto-Review\n\n${feedback}`],
             { stdout: 'pipe', stderr: 'pipe' },
           );
-          await commentProc.exited;
+          const commentExitCode = await commentProc.exited;
 
-          // Trigger a revision run — AI feedback is now visible on the PR
-          const revisionRunId = enqueueRevision(
-            updatedRun ?? run,
-            prNum,
-            issue,
-          );
-          bufferLog(runId, 'system',
-            `[runner] Auto-review failed — enqueued revision ${revisionRunId} with AI feedback`
-          );
+          if (commentExitCode !== 0) {
+            bufferLog(runId, 'system',
+              `[runner] Auto-review: failed to post PR comment (exit ${commentExitCode}) — skipping revision`
+            );
+          } else {
+            // Trigger a revision run — AI feedback is now visible on the PR
+            const revisionRunId = enqueueRevision(
+              updatedRun ?? run,
+              prNum,
+              issue,
+            );
+            bufferLog(runId, 'system',
+              `[runner] Auto-review failed — enqueued revision ${revisionRunId} with AI feedback`
+            );
+          }
         }
       } catch (err) {
         bufferLog(runId, 'system',

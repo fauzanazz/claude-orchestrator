@@ -1,45 +1,29 @@
-# Progress — FAU-50: Run Analytics API and Dashboard Charts
+# Progress — FAU-54: AI Auto-Review Gate
 
 ## Status: Complete
 
 ## What was accomplished
 
-All features from the design document have been implemented and verified:
+Addressed all review feedback from cubic-dev-ai across two review rounds:
 
-### 1. Analytics query functions (`orchestrator/src/db.ts`)
-- `getAnalyticsOverview(days)` — total runs, success/fail counts, success rate, avg duration, avg iterations, retry rate
-- `getProjectStats(days)` — same metrics grouped by project
-- `getDailyThroughput(days)` — daily run counts (total, success, failed)
-- `getFailureBreakdown(days, project?)` — error category classification with counts
+### Round 1 fixes (prior commits)
+- **P2 review-gate.ts:115**: Removed `parsed.pass` from validation check since it's recomputed — now only validates `Array.isArray(parsed.issues)`
+- **P2 skip existing PR runs**: Added `!run.pr_number` guard to skip auto-review for runs that already have a PR
+- **P1 feedback passing**: PR comment is now awaited before enqueueing revision, ensuring feedback exists when revision agent reads PR comments
+- **P1 ordering**: Moved `await commentProc.exited` before `enqueueRevision` call
 
-All queries exclude fix runs (`is_fix = 0`) and accept a configurable `days` parameter.
+### Round 2 fix (this commit)
+- **P1 runner.ts:1171**: Added exit code check on `gh pr comment` — if the comment fails to post, the revision is skipped with a log message instead of enqueueing a revision that lacks feedback context
 
-### 2. REST API endpoints (`orchestrator/src/server.ts`)
-- `GET /api/analytics/overview?days=N` — aggregate stats
-- `GET /api/analytics/projects?days=N` — per-project breakdown
-- `GET /api/analytics/throughput?days=N` — daily run counts
-- `GET /api/analytics/failures?days=N&project=X` — failure cause breakdown
-
-All endpoints cap days at 365 and default to 30.
-
-### 3. Dashboard charts (`orchestrator/board/index.html`)
-- Stat cards: Total Runs, Success Rate, Avg Duration, Avg Sessions, Retry Rate
-- Throughput bar chart: stacked green (success) / red (failed) bars per day
-- Project breakdown: horizontal bars color-coded by success rate
-- Auto-refreshes every 60 seconds
-
-### 4. Tests (`orchestrator/src/db.test.ts`)
-- Comprehensive tests for all four analytics functions
-- Tests for empty state, correct aggregation, fix run exclusion, project grouping, date grouping, error categorization, project filtering
+## Implementation summary
+- `orchestrator/src/config.ts` — `autoReview` and `autoReviewModel` config flags
+- `orchestrator/src/review-gate.ts` — `reviewRun()` and `formatReviewFeedback()`
+- `orchestrator/src/runner.ts` — Review gate integration after PR creation
+- `orchestrator/src/review-gate.test.ts` — Unit tests for `formatReviewFeedback`
 
 ## Verification
-- 203 tests pass, 0 failures
+- 225 tests pass, 0 failures
 - TypeScript type check passes with no errors
-- Zero new dependencies (pure CSS/SVG charts)
 
 ## What's left
-Nothing — all design requirements are implemented and tested.
-
-## Decisions
-- Used direct SQL inserts in test helper (`createAnalyticsRun`) for full control over timestamps and fields
-- Followed existing codebase patterns for prepared statements and query structure
+Nothing — all review feedback has been addressed.

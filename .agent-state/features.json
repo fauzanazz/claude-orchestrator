@@ -1,14 +1,11 @@
 [
-  { "name": "analytics-overview-query", "description": "Analytics overview query: total runs, success rate, avg duration, avg sessions, retry rate", "passes": true },
-  { "name": "project-stats-query", "description": "Per-project breakdown query: same metrics grouped by project", "passes": true },
-  { "name": "daily-throughput-query", "description": "Daily throughput query: runs per day over configurable period", "passes": true },
-  { "name": "failure-breakdown-query", "description": "Failure breakdown query: top error categories with counts", "passes": true },
-  { "name": "api-analytics-overview", "description": "GET /api/analytics/overview endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-projects", "description": "GET /api/analytics/projects endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-throughput", "description": "GET /api/analytics/throughput endpoint with ?days=N param", "passes": true },
-  { "name": "api-analytics-failures", "description": "GET /api/analytics/failures endpoint with ?days=N and ?project params", "passes": true },
-  { "name": "dashboard-stat-cards", "description": "Dashboard analytics section with stat cards (total, success rate, duration, sessions, retry rate)", "passes": true },
-  { "name": "dashboard-throughput-chart", "description": "Dashboard throughput bar chart (daily runs over 30d)", "passes": true },
-  { "name": "dashboard-project-breakdown", "description": "Dashboard per-project breakdown with color-coded bars", "passes": true },
-  { "name": "analytics-tests", "description": "Tests for all analytics query functions", "passes": true }
+  { "name": "config-flag", "description": "AUTO_REVIEW and AUTO_REVIEW_MODEL env var config", "passes": true },
+  { "name": "review-gate-module", "description": "review-gate.ts with reviewRun and formatReviewFeedback", "passes": true },
+  { "name": "runner-integration", "description": "Integrate review gate into executeRun after PR creation", "passes": true },
+  { "name": "skip-fix-runs", "description": "Skip review gate for fix runs", "passes": true },
+  { "name": "skip-revision-runs", "description": "Skip review gate for revision runs (prevent loops)", "passes": true },
+  { "name": "skip-retry-runs", "description": "Skip review gate for retry runs", "passes": true },
+  { "name": "skip-existing-pr-runs", "description": "Skip review gate for runs that already have a PR", "passes": true },
+  { "name": "comment-exit-check", "description": "Check gh pr comment exit status before enqueueing revision", "passes": true },
+  { "name": "review-gate-tests", "description": "Unit tests for formatReviewFeedback", "passes": true }
 ]
