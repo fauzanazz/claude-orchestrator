@@ -67,7 +67,7 @@ async function verifyGitHubSignature(
 
 const sseClients: Set<ReadableStreamDefaultController> = new Set();
 
-export function broadcastSSE(event: SSEEvent): void {
+function broadcastSSE(event: SSEEvent): void {
   const data = `data: ${JSON.stringify(event)}\n\n`;
   const encoder = new TextEncoder();
   for (const controller of sseClients) {
@@ -110,8 +110,8 @@ if (!apiToken) {
     writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
     log.info(`[server] Generated ephemeral API token → ${tokenPath}`);
   } catch (err) {
-    log.warn(`[server] Could not write API token to ${tokenPath}: ${err}`);
-    log.info(`[server] Ephemeral API token: ${apiToken}`);
+    log.warn(`[server] Could not write API token to ${tokenPath}: ${err instanceof Error ? err.message : err}`);
+    log.info(`[server] Ephemeral API token (first 8 chars): ${apiToken.slice(0, 8)}…`);
   }
   log.info(`[server] Set API_TOKEN env var to persist across restarts`);
 }
@@ -127,7 +127,7 @@ function sanitizeErrorMessage(msg: string): string {
   });
 }
 
-export const app = new Hono();
+const app = new Hono();
 
 // ---------------------------------------------------------------------------
 // Tunnel guard — only /webhook/* is reachable through the Cloudflare tunnel.

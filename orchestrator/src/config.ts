@@ -101,7 +101,13 @@ export function loadProjects(): ProjectsConfig {
     return _projectsCache;
   }
   const raw = readFileSync(config.projectsConfigPath, 'utf-8');
-  _projectsCache = JSON.parse(raw) as ProjectsConfig;
+  let parsed: ProjectsConfig;
+  try {
+    parsed = JSON.parse(raw) as ProjectsConfig;
+  } catch {
+    throw new Error(`Invalid JSON in projects config: ${config.projectsConfigPath}`);
+  }
+  _projectsCache = parsed;
   _projectsMtime = mtime;
   return _projectsCache;
 }

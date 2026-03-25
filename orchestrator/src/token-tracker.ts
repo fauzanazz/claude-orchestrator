@@ -1,11 +1,11 @@
-export interface TokenUsage {
+interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
   cache_creation_tokens: number;
 }
 
-export interface CostEstimate extends TokenUsage {
+interface CostEstimate extends TokenUsage {
   cost_usd: number;
   model: string | null;
 }

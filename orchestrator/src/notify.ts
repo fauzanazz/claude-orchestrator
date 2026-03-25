@@ -161,7 +161,7 @@ export function sendMacOSNotification(title: string, body: string, url: string):
 // Slack notification (Block Kit)
 // ---------------------------------------------------------------------------
 
-export async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
+async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
   if (!config.slackWebhookUrl) return;
 
   const checksText = pr.checks.length > 0
@@ -222,7 +222,7 @@ export async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
   }
 }
 
-export interface FixExhaustedOpts {
+interface FixExhaustedOpts {
   repo: string;
   prNumber: number;
   title: string;

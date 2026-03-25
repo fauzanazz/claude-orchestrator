@@ -49,6 +49,7 @@ import {
   pushFromWorktree,
   createPR,
   rebaseOnto,
+  continueRebase,
   abortRebase,
   forcePushFromWorktree,
   type RebaseResult,
@@ -139,7 +140,7 @@ function broadcastSSE(event: SSEEvent): void {
 
 export const logBuffers: Map<string, Array<{ stream: string; content: string }>> = new Map();
 
-export function bufferLog(runId: string, stream: string, content: string): void {
+function bufferLog(runId: string, stream: string, content: string): void {
   if (!logBuffers.has(runId)) {
     logBuffers.set(runId, []);
   }
@@ -147,7 +148,7 @@ export function bufferLog(runId: string, stream: string, content: string): void 
   broadcastSSE({ type: 'log', runId, stream, content });
 }
 
-export function flushLogs(runId: string): void {
+function flushLogs(runId: string): void {
   const entries = logBuffers.get(runId);
   if (!entries || entries.length === 0) return;
 
@@ -165,20 +166,59 @@ setInterval(() => {
 }, config.logFlushIntervalMs);
 
 // ---------------------------------------------------------------------------
+// Linear API rate limiter (shared across lineark CLI + direct GraphQL calls)
+// Linear allows 30 requests per 60s — we stay under with a 25-req budget.
+// ---------------------------------------------------------------------------
+
+const linearCallTimestamps: number[] = [];
+const LINEAR_RATE_LIMIT = 25;
+const LINEAR_RATE_WINDOW_MS = 60_000;
+
+async function waitForLinearRateLimit(): Promise<void> {
+  const now = Date.now();
+  // Evict timestamps outside the window
+  while (linearCallTimestamps.length > 0 && linearCallTimestamps[0]! < now - LINEAR_RATE_WINDOW_MS) {
+    linearCallTimestamps.shift();
+  }
+  if (linearCallTimestamps.length >= LINEAR_RATE_LIMIT) {
+    const waitMs = linearCallTimestamps[0]! + LINEAR_RATE_WINDOW_MS - now + 100;
+    log.debug(`[runner] Linear rate limit: waiting ${Math.round(waitMs / 1000)}s`);
+    await new Promise(resolve => setTimeout(resolve, waitMs));
+    return waitForLinearRateLimit();
+  }
+  linearCallTimestamps.push(Date.now());
+}
+
+// ---------------------------------------------------------------------------
 // Linear interaction
 // ---------------------------------------------------------------------------
 
+const LINEARK_MAX_RETRIES = 3;
+
 async function runLineark(args: string[]): Promise<string> {
-  const proc = Bun.spawn(['lineark', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  const [rawOut, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
-  ]);
-  if (exitCode !== 0) {
+  for (let attempt = 0; attempt <= LINEARK_MAX_RETRIES; attempt++) {
+    await waitForLinearRateLimit();
+
+    const proc = Bun.spawn(['lineark', ...args], { stdout: 'pipe', stderr: 'pipe' });
+    const [rawOut, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    if (exitCode === 0) return rawOut;
+
     const errText = await new Response(proc.stderr).text();
+
+    if ((errText.includes('RATELIMITED') || errText.includes('429')) && attempt < LINEARK_MAX_RETRIES) {
+      const jitter = Math.floor(Math.random() * 2000);
+      const backoffMs = 2000 * 2 ** attempt + jitter; // ~2-4s, ~4-6s, ~8-10s
+      log.warn(`[runner] lineark rate-limited, retry ${attempt + 1}/${LINEARK_MAX_RETRIES} in ${(backoffMs / 1000).toFixed(1)}s`);
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+      continue;
+    }
+
     throw new Error(`lineark ${args[0]} failed (exit ${exitCode}): ${errText.trim()}`);
   }
-  return rawOut;
+  throw new Error(`lineark ${args[0]} failed after ${LINEARK_MAX_RETRIES} retries`);
 }
 
 // lineark doesn't include the parent field in `issues read` output, so we
@@ -194,6 +234,7 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
   }
 
   try {
+    await waitForLinearRateLimit();
     const resp = await fetch('https://api.linear.app/graphql', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token },
@@ -209,7 +250,7 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
   }
 }
 
-export async function pollLinear(): Promise<LinearIssue[]> {
+async function pollLinear(): Promise<LinearIssue[]> {
   // Step 1: List issues (lean output — has identifier + state but no id/description)
   const listOut = await runLineark(['issues', 'list', '--format', 'json']);
   let listJson: unknown;
@@ -230,8 +271,8 @@ export async function pollLinear(): Promise<LinearIssue[]> {
 
   clearParentStateCache();
 
-  // Step 2: Fetch full details concurrently (5 at a time)
-  const POLL_CONCURRENCY = 5;
+  // Step 2: Fetch full details concurrently (3 at a time to stay within rate limits)
+  const POLL_CONCURRENCY = 3;
   const chunks = chunkArray(ready, POLL_CONCURRENCY);
   const issues: LinearIssue[] = [];
 
@@ -340,7 +381,7 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
   };
 }
 
-export function updateLinearStatus(key: string, state: string): void {
+function updateLinearStatus(key: string, state: string): void {
   // Fire and forget
   Bun.spawn(['lineark', 'issues', 'update', key, '-s', state], {
     stdout: 'pipe',
@@ -348,7 +389,7 @@ export function updateLinearStatus(key: string, state: string): void {
   });
 }
 
-export function commentOnIssue(key: string, message: string): void {
+function commentOnIssue(key: string, message: string): void {
   // Fire and forget
   Bun.spawn(['lineark', 'comments', 'create', key, '--body', message], {
     stdout: 'pipe',
@@ -356,7 +397,7 @@ export function commentOnIssue(key: string, message: string): void {
   });
 }
 
-export function commentOnPR(repo: string, prNumber: number, body: string): void {
+function commentOnPR(repo: string, prNumber: number, body: string): void {
   Bun.spawn(['gh', 'pr', 'comment', String(prNumber), '--repo', repo, '--body', body], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -381,7 +422,7 @@ function getAgentConclusion(runId: string): string | null {
 
 const parentStateCache = new Map<string, string>();
 
-export function clearParentStateCache(): void {
+function clearParentStateCache(): void {
   parentStateCache.clear();
 }
 
@@ -497,7 +538,7 @@ export function parseReviewFeedback(rawJson: string): string | undefined {
   return sections.join('\n\n---\n\n');
 }
 
-export async function generateCodebaseSummary(worktreePath: string): Promise<string> {
+async function generateCodebaseSummary(worktreePath: string): Promise<string> {
   const treeProc = Bun.spawn(
     ['tree', '-L', '2', '--gitignore', '-I', 'node_modules|.git|.worktrees'],
     { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
@@ -522,7 +563,7 @@ export async function generateCodebaseSummary(worktreePath: string): Promise<str
     findProc.exited,
   ]);
 
-  const files = findOut.trim().split('\n').sort().join('\n');
+  const files = findOut.trim().split('\n').sort((a, b) => a.localeCompare(b)).join('\n');
   return `## Codebase Structure\n\n\`\`\`\n${files}\n\`\`\``;
 }
 
@@ -532,7 +573,7 @@ async function fileExistsAndRead(filePath: string): Promise<string | null> {
   return file.text();
 }
 
-export function buildRulesSection(issue: Issue, isRevision: boolean): string {
+function buildRulesSection(issue: Issue, isRevision: boolean): string {
   const lines: string[] = [
     '## Agent Rules',
     '',
@@ -552,7 +593,7 @@ export function buildRulesSection(issue: Issue, isRevision: boolean): string {
   return lines.join('\n');
 }
 
-export async function buildAgentPrompt(
+async function buildAgentPrompt(
   issue: Issue,
   worktreePath: string,
   opts?: {
@@ -858,7 +899,7 @@ async function buildFixPrompt(
     '### Instructions',
     '',
     fixType === 'merge_conflict'
-      ? 'A rebase is in progress and conflict markers are present in the working tree. Resolve all conflicts in the affected files, then stage and continue the rebase:\n1. Edit each conflicted file to resolve the conflict markers (<<<<<<< / ======= / >>>>>>>).\n2. Run `git add <file>` for each resolved file.\n3. Run `git rebase --continue` to complete the rebase.\n4. Do NOT run `git commit` — the rebase continuation handles the commit.'
+      ? 'A rebase is in progress and conflict markers are present in the working tree. Resolve all conflicts in the affected files and stage them:\n1. Edit each conflicted file to resolve the conflict markers (<<<<<<< / ======= / >>>>>>>).\n2. Run `git add <file>` for each resolved file.\n3. Do NOT run `git rebase --continue` or `git commit` — the orchestrator handles those.'
       : 'Fix the CI/CD failure described above. Read the error logs carefully, identify the root cause, make the necessary code changes, and commit the fix.',
     '',
     '- Do not push — the orchestrator handles git push.',
@@ -872,7 +913,7 @@ async function buildFixPrompt(
 // Agent execution
 // ---------------------------------------------------------------------------
 
-export async function executeRun(
+async function executeRun(
   run: Run,
   project: ProjectConfig,
   projectKey: string,
@@ -1175,6 +1216,9 @@ export async function executeRun(
     }
 
     if (run.is_fix && run.fix_type === 'merge_conflict') {
+      // Agent resolved conflicts and staged files; runner continues the rebase
+      bufferLog(runId, 'system', `[runner] Continuing rebase after agent conflict resolution`);
+      await continueRebase(worktreePath!);
       bufferLog(runId, 'system', `[runner] Force-pushing branch ${issue.branch} (post-rebase)`);
       await forcePushFromWorktree(worktreePath!, issue.branch);
     } else {
@@ -1244,7 +1288,7 @@ export async function executeRun(
     ) {
       bufferLog(runId, 'system', '[runner] Running AI auto-review gate...');
       try {
-        const reviewResult = await reviewRun(updatedRun ?? run, issue, worktreePath);
+        const reviewResult = await reviewRun(issue, worktreePath);
         const issueCount = reviewResult.issues.length;
         const errorCount = reviewResult.issues.filter((i) => i.severity === 'error').length;
 
@@ -1444,7 +1488,7 @@ export function buildRetryContext(failedRun: Run): string {
   return sections.join('\n');
 }
 
-export function enqueue(run: Run): boolean {
+function enqueue(run: Run): boolean {
   if (queue.length >= config.maxQueueSize) {
     log.warn(`[runner] Queue full (${queue.length}/${config.maxQueueSize}), rejecting run ${run.id}`);
     updateRunStatus(run.id, 'failed', {
@@ -1493,7 +1537,7 @@ export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue
   return newRun.id;
 }
 
-export function enqueueRetry(
+function enqueueRetry(
   failedRun: Run,
   issue: Issue,
   delayMs = 0,
@@ -1548,13 +1592,13 @@ export function enqueueRetry(
   return newRun.id;
 }
 
-export function enqueueFix(
+function enqueueFix(
   originalRun: Run,
   prNumber: number,
   issue: Issue,
   fixType: FixType,
   attempt: number,
-): string {
+): string | null {
   const newRun = createRunRecord({
     project: originalRun.project,
     issue_id: originalRun.issue_id,
@@ -1574,17 +1618,21 @@ export function enqueueFix(
   insertRun(newRun);
 
   const fullRun = getRun(newRun.id);
-  if (fullRun) {
-    enqueueWithIssue(fullRun, issue);
-    broadcastSSE({ type: 'run_update', run: fullRun });
+  if (!fullRun) {
+    // INSERT OR IGNORE dropped the row (likely a queued/running run already
+    // exists for this issue_id due to the partial unique index).
+    log.warn(`[fixer] Run ${newRun.id} was not inserted — duplicate active run for issue ${newRun.issue_key}`);
+    return null;
   }
 
+  enqueueWithIssue(fullRun, issue);
+  broadcastSSE({ type: 'run_update', run: fullRun });
   upsertFixTracking(issue.repo, prNumber, fixType, newRun.id);
 
   return newRun.id;
 }
 
-export async function dispatchNextRun(): Promise<void> {
+async function dispatchNextRun(): Promise<void> {
   if (shuttingDown) return;
   if (activeRunCount >= config.maxConcurrentAgents) return;
   if (queue.length === 0) return;
@@ -1637,7 +1685,7 @@ export async function dispatchNextRun(): Promise<void> {
 // PR review polling
 // ---------------------------------------------------------------------------
 
-export async function pollReviews(): Promise<void> {
+async function pollReviews(): Promise<void> {
   const watchable = getWatchableRuns(config.reviewWatchMaxAgeDays);
   if (watchable.length === 0) return;
 
@@ -1799,7 +1847,7 @@ async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
 // Auto-fix polling
 // ---------------------------------------------------------------------------
 
-export async function pollFixable(prStatuses?: Map<string, import('./notify.ts').GHPRView[]>): Promise<void> {
+async function pollFixable(prStatuses?: Map<string, import('./notify.ts').GHPRView[]>): Promise<void> {
   const allStatuses = prStatuses ?? await fetchAllPRStatuses();
 
   for (const [repo, prs] of allStatuses) {
@@ -1875,7 +1923,9 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
               // Rebase failed — abort and spawn agent
               await abortRebase(worktreePath);
               const fixRunId = enqueueFix(originalRun, pr.number, issue, fixType, currentAttempt);
-              log.info(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+              if (fixRunId) {
+                log.info(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+              }
             }
           } finally {
             cleanupWorktree(projectPath, worktreePath).catch(() => {});
@@ -1884,7 +1934,9 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
           // CI failure — spawn agent (it will fetch CI logs in its prompt)
           log.info(`[fixer] CI failure detected for PR #${pr.number} in ${repo}`);
           const fixRunId = enqueueFix(originalRun, pr.number, issue, 'ci_failure', currentAttempt);
-          log.info(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+          if (fixRunId) {
+            log.info(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+          }
         }
       } catch (err) {
         log.error(`[fixer] Error checking PR #${pr.number} in ${repo}:`, err);

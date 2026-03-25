@@ -2,7 +2,7 @@ import { $ } from 'bun';
 import { join } from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 import { config } from './config.ts';
-import type { Run, Issue } from './types.ts';
+import type { Issue } from './types.ts';
 
 export interface ReviewResult {
   pass: boolean;
@@ -22,7 +22,6 @@ interface ReviewIssue {
  * Returns a ReviewResult indicating whether the PR passes or needs revisions.
  */
 export async function reviewRun(
-  _run: Run,
   issue: Issue,
   worktreePath: string,
 ): Promise<ReviewResult> {

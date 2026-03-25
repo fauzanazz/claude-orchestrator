@@ -71,7 +71,7 @@ db.run(`
 function migrateAddColumn(sql: string): void {
   try {
     db.run(sql);
-  } catch (err) {
+  } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('duplicate column')) throw err;
   }
@@ -587,7 +587,7 @@ export function snapshotDatabase(maxSnapshots: number): string | null {
   // Prune old snapshots beyond the limit
   const files = readdirSync(snapshotDir)
     .filter((f) => f.startsWith('orchestrator-') && f.endsWith('.db'))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
   while (files.length > maxSnapshots) {
     const oldest = files.shift()!;
     unlinkSync(join(snapshotDir, oldest));

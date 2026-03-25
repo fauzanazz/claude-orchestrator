@@ -32,7 +32,7 @@ async function spawn(
   return { exitCode, stdout, stderr };
 }
 
-async function pathExists(p: string): Promise<boolean> {
+function pathExists(p: string): Promise<boolean> {
   return Bun.file(p).exists();
 }
 
@@ -478,6 +478,22 @@ export async function rebaseOnto(
     success: false,
     conflictOutput: [rebaseResult.stdout, rebaseResult.stderr].filter(Boolean).join('\n').trim(),
   };
+}
+
+/**
+ * Continues a rebase after conflicts have been resolved and staged.
+ * Uses `core.editor=true` to skip the interactive commit-message editor.
+ */
+export async function continueRebase(worktreePath: string): Promise<void> {
+  const result = await spawn(
+    ['git', '-c', 'core.editor=true', 'rebase', '--continue'],
+    { cwd: worktreePath },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `git rebase --continue failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
 }
 
 /**

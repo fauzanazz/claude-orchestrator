@@ -206,5 +206,13 @@
     "linearTeam": "FAU",
     "linearProfile": "",
     "linearProject": "Text Tone Translator"
+  },
+  "agentbox": {
+    "path": "/Users/enjat/Github/agentbox",
+    "repo": "fauzanazz/agentbox",
+    "baseBranch": "main",
+    "linearTeam": "FAU",
+    "linearProfile": "",
+    "linearProject": "AgentBox"
   }
 }

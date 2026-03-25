@@ -54,7 +54,7 @@ export function scrubRunContext(context: RunContext): RunContext {
 // ~900K tokens ≈ 3.6M chars. Leave headroom.
 const MAX_CONTEXT_CHARS = 3_200_000;
 
-export async function gatherRunContext(run: Run, issue: Issue, worktreePath: string): Promise<RunContext> {
+async function gatherRunContext(run: Run, issue: Issue, worktreePath: string): Promise<RunContext> {
   // Agent logs from DB (up to 5000 entries)
   const logs = getLogsForRun(run.id, 5000);
   const agentLogs = logs.map((l) => `[${l.stream}] ${l.content}`).join('\n');
@@ -407,7 +407,7 @@ async function updateProjectDocs(
 const MEMORY_MAX_CHARS = 4000;
 const MEMORY_TIMEOUT_MS = 10_000; // 10s timeout for obsidian-memory calls
 
-async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
