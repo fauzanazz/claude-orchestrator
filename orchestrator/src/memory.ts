@@ -402,6 +402,15 @@ async function updateProjectDocs(
 // ---------------------------------------------------------------------------
 
 const MEMORY_MAX_CHARS = 4000;
+const MEMORY_TIMEOUT_MS = 10_000; // 10s timeout for obsidian-memory calls
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer!));
+}
 
 /**
  * Read relevant project memory from Obsidian for injection into agent prompts.
@@ -426,7 +435,7 @@ export async function readProjectMemory(
 
   // 1. Search for recent sessions mentioning this project
   try {
-    const result = await $`obsidian-memory search ${projectKey}`.quiet().text();
+    const result = await withTimeout($`obsidian-memory search ${projectKey}`.quiet().text(), MEMORY_TIMEOUT_MS);
     const trimmed = result.trim();
     if (trimmed.length > 50) {
       const truncated = trimmed.slice(0, Math.floor(MEMORY_MAX_CHARS * 0.6));
@@ -434,7 +443,7 @@ export async function readProjectMemory(
       totalChars += truncated.length;
     }
   } catch {
-    // obsidian-memory search failed — continue without project context
+    // obsidian-memory search failed or timed out — continue without project context
   }
 
   // 2. Search for issue-specific context if provided
@@ -442,7 +451,7 @@ export async function readProjectMemory(
     try {
       const remaining = MEMORY_MAX_CHARS - totalChars;
       const query = opts.issueTitle.slice(0, 80); // Truncate long titles for search
-      const result = await $`obsidian-memory search ${query}`.quiet().text();
+      const result = await withTimeout($`obsidian-memory search ${query}`.quiet().text(), MEMORY_TIMEOUT_MS);
       const trimmed = result.trim();
       if (trimmed.length > 50 && !sectionsContain(sections, trimmed)) {
         const truncated = trimmed.slice(0, Math.min(trimmed.length, remaining));
