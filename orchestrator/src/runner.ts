@@ -48,6 +48,7 @@ import {
   rebaseOnto,
   abortRebase,
   forcePushFromWorktree,
+  type RebaseResult,
 } from './git.ts';
 import { initWorktree } from './init.ts';
 import { validateDesignPath, validateBranch, validateRepo } from './validate.ts';
@@ -904,6 +905,13 @@ export async function executeRun(
     worktreePath = await setupWorktree(projectPath, issue.branch, issue.key, slug);
     bufferLog(runId, 'system', `[runner] Worktree: ${worktreePath}`);
 
+    // For fix runs, rebase BEFORE writing settings (rebase needs clean working tree)
+    let earlyRebaseResult: RebaseResult | null = null;
+    if (run.is_fix && run.fix_type && run.fix_type !== 'ci_failure') {
+      bufferLog(runId, 'system', `[runner] Rebasing onto ${issue.baseBranch} to surface conflict markers`);
+      earlyRebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
+    }
+
     await writeAgentSettings(worktreePath, project.allowedTools);
 
     let initFailure: string | null = null;
@@ -928,8 +936,7 @@ export async function executeRun(
       if (run.fix_type === 'ci_failure') {
         errorContext = await fetchCIFailureLogs(issue.repo, issue.branch);
       } else {
-        bufferLog(runId, 'system', `[runner] Rebasing onto ${issue.baseBranch} to surface conflict markers`);
-        const rebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
+        const rebaseResult = earlyRebaseResult!;
         if (rebaseResult.success) {
           bufferLog(runId, 'system', `[runner] Rebase succeeded cleanly, force-pushing`);
           await forcePushFromWorktree(worktreePath, issue.branch);
