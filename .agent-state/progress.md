@@ -4,16 +4,20 @@
 
 ## What was accomplished
 
-Addressed all review feedback from cubic-dev-ai across two review rounds:
+All review feedback from cubic-dev-ai across three review rounds has been addressed:
 
-### Round 1 fixes (prior commits)
-- **P2 review-gate.ts:115**: Removed `parsed.pass` from validation check since it's recomputed — now only validates `Array.isArray(parsed.issues)`
+### Round 1 fixes
+- **P2 review-gate.ts:115**: Removed `parsed.pass` from validation check — only `Array.isArray(parsed.issues)` is validated since `pass` is recomputed from error severity
 - **P2 skip existing PR runs**: Added `!run.pr_number` guard to skip auto-review for runs that already have a PR
-- **P1 feedback passing**: PR comment is now awaited before enqueueing revision, ensuring feedback exists when revision agent reads PR comments
-- **P1 ordering**: Moved `await commentProc.exited` before `enqueueRevision` call
+- **P1 feedback passing**: PR comment is posted and awaited before enqueueing revision, ensuring feedback exists when revision agent reads PR comments
+- **P1 ordering**: `await commentProc.exited` runs before `enqueueRevision` call
 
-### Round 2 fix (this commit)
-- **P1 runner.ts:1171**: Added exit code check on `gh pr comment` — if the comment fails to post, the revision is skipped with a log message instead of enqueueing a revision that lacks feedback context
+### Round 2 fix
+- **P1 runner.ts:1171**: Added exit code check on `gh pr comment` — revision is skipped with a log message if the comment fails to post
+
+### Round 3
+- Issues reference files outside FAU-54 scope (`db.ts`, `board/index.html`, `run-analytics-dashboard.md`, `cross-run-memory-injection.md`) — not addressed per scope discipline
+- `.agent-state` file issues were about prior state and are now correct
 
 ## Implementation summary
 - `orchestrator/src/config.ts` — `autoReview` and `autoReviewModel` config flags
@@ -26,4 +30,4 @@ Addressed all review feedback from cubic-dev-ai across two review rounds:
 - TypeScript type check passes with no errors
 
 ## What's left
-Nothing — all review feedback has been addressed.
+Nothing — all in-scope review feedback has been addressed.
