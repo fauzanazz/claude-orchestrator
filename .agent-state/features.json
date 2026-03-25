@@ -1,11 +1,9 @@
 [
-  { "name": "token-tracker-module", "description": "Create TokenTracker class that parses stream-json result events and accumulates token usage", "passes": true },
-  { "name": "db-token-columns", "description": "Add input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd columns to runs table", "passes": true },
-  { "name": "db-update-tokens-fn", "description": "Add updateRunTokens function to persist token data per run", "passes": true },
-  { "name": "db-cost-summary-fn", "description": "Add getCostSummary function for aggregate cost queries with project breakdown", "passes": true },
-  { "name": "run-type-token-fields", "description": "Add token tracking fields to Run interface in types.ts", "passes": true },
-  { "name": "runner-stream-callback", "description": "Add onRawLine callback to streamOutput for token parsing", "passes": true },
-  { "name": "runner-token-integration", "description": "Integrate TokenTracker into executeRun for both fix and normal runs", "passes": true },
-  { "name": "cost-api-endpoint", "description": "Add GET /api/cost endpoint for aggregate cost summaries", "passes": true },
-  { "name": "token-tracker-tests", "description": "Unit tests for TokenTracker parsing, accumulation, and cost estimation", "passes": true }
+  { "name": "config-auto-review-flag", "description": "Add AUTO_REVIEW and AUTO_REVIEW_MODEL env var config flags", "passes": true },
+  { "name": "review-gate-module", "description": "Create review-gate.ts with reviewRun() and formatReviewFeedback()", "passes": true },
+  { "name": "runner-integration", "description": "Integrate review gate into executeRun() after PR creation", "passes": true },
+  { "name": "skip-fix-revision-retry", "description": "Skip review gate for fix runs, revision runs, and retry runs", "passes": true },
+  { "name": "pr-comment-on-fail", "description": "Post AI review feedback as PR comment when review fails", "passes": true },
+  { "name": "auto-enqueue-revision", "description": "Auto-trigger revision run when review gate fails", "passes": true },
+  { "name": "review-gate-tests", "description": "Unit tests for formatReviewFeedback()", "passes": true }
 ]

@@ -4,6 +4,7 @@ import { monotonicFactory } from 'ulid';
 import { config } from './config.ts';
 import { documentRun, readProjectMemory } from './memory.ts';
 import { TokenTracker } from './token-tracker.ts';
+import { reviewRun, formatReviewFeedback } from './review-gate.ts';
 import {
   insertRun,
   insertLog,
@@ -1226,6 +1227,47 @@ export async function executeRun(
 
     const updatedRun = getRun(runId);
     if (updatedRun) broadcastSSE({ type: 'run_update', run: updatedRun });
+
+    // --- AI Auto-Review Gate ---
+    if (
+      config.autoReview &&
+      !run.is_fix &&
+      !run.is_revision &&
+      run.retry_attempt === 0 &&
+      worktreePath
+    ) {
+      bufferLog(runId, 'system', '[runner] Running AI auto-review gate...');
+      try {
+        const reviewResult = await reviewRun(updatedRun ?? run, issue, worktreePath);
+        const issueCount = reviewResult.issues.length;
+        const errorCount = reviewResult.issues.filter((i) => i.severity === 'error').length;
+
+        bufferLog(runId, 'system',
+          `[runner] Auto-review: ${reviewResult.pass ? 'PASS' : 'FAIL'} — ` +
+          `${issueCount} issue(s) (${errorCount} error(s)). ${reviewResult.summary}`
+        );
+
+        if (!reviewResult.pass && prNum) {
+          // Post review feedback as PR comment
+          const feedback = formatReviewFeedback(reviewResult);
+          commentOnPR(issue.repo, prNum, `### AI Auto-Review\n\n${feedback}`);
+
+          // Trigger a revision run with the AI feedback
+          const revisionRunId = enqueueRevision(
+            updatedRun ?? run,
+            prNum,
+            issue,
+          );
+          bufferLog(runId, 'system',
+            `[runner] Auto-review failed — enqueued revision ${revisionRunId} with AI feedback`
+          );
+        }
+      } catch (err) {
+        bufferLog(runId, 'system',
+          `[runner] Auto-review failed (non-fatal): ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
 
     // Document the run to obsidian-memory (fire-and-forget, before worktree cleanup)
     if (worktreePath && updatedRun) {

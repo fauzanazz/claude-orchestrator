@@ -72,4 +72,8 @@ export const config = {
   // Memory agent (Gemini Flash 2 post-run documentation)
   geminiApiKey: process.env.GEMINI_API_KEY,
   memoryProject: process.env.MEMORY_PROJECT,
+
+  // AI auto-review gate
+  autoReview: process.env.AUTO_REVIEW === 'true',
+  autoReviewModel: process.env.AUTO_REVIEW_MODEL ?? 'gemini-2.0-flash',
 };
