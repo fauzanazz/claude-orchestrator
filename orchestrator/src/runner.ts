@@ -1273,7 +1273,6 @@ export async function executeRun(
         );
       }
     }
-
     // Document the run to obsidian-memory (fire-and-forget, before worktree cleanup)
     if (worktreePath && updatedRun) {
       await documentRun(updatedRun, issue, worktreePath).catch((e) =>

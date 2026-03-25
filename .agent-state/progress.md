@@ -1,28 +1,45 @@
-# Progress — AI First-Pass Review Gate (FAU-54)
+# Progress — FAU-50: Run Analytics API and Dashboard Charts
 
-## Accomplished
+## Status: Complete
 
-All requirements implemented and review feedback addressed:
+## What was accomplished
 
-1. **Config flags** (`config.ts`): `autoReview` (opt-in via `AUTO_REVIEW=true`) and `autoReviewModel` (defaults to `gemini-2.0-flash`)
-2. **Review gate module** (`review-gate.ts`): `reviewRun()` (Gemini review of diff vs design doc) and `formatReviewFeedback()`
-3. **Runner integration** (`runner.ts`): Review gate after PR creation, before memory documentation
-4. **Loop prevention**: Skipped for fix runs, revision runs, retry runs, and runs that already have a PR
-5. **PR comment**: On failure, posts formatted feedback as an awaited PR comment
-6. **Auto-revision**: On failure, enqueues revision run — only after PR comment is confirmed posted
-7. **Tests** (`review-gate.test.ts`): 6 tests covering all `formatReviewFeedback()` branches
+All features from the design document have been implemented and verified:
 
-## Review Fixes (Revision)
+### 1. Analytics query functions (`orchestrator/src/db.ts`)
+- `getAnalyticsOverview(days)` — total runs, success/fail counts, success rate, avg duration, avg iterations, retry rate
+- `getProjectStats(days)` — same metrics grouped by project
+- `getDailyThroughput(days)` — daily run counts (total, success, failed)
+- `getFailureBreakdown(days, project?)` — error category classification with counts
 
-- **P2**: Removed `parsed.pass` from response validation since it's recomputed — prevents rejecting valid issue lists
-- **P2**: Added `!run.pr_number` check to skip auto-review for runs that already have a PR
-- **P1**: Replaced fire-and-forget `commentOnPR()` with awaited `Bun.spawn` so PR comment exists before revision reads it
-- **P1**: Revision enqueue now happens after comment is confirmed, ensuring feedback is available
+All queries exclude fix runs (`is_fix = 0`) and accept a configurable `days` parameter.
 
-## What's Left
+### 2. REST API endpoints (`orchestrator/src/server.ts`)
+- `GET /api/analytics/overview?days=N` — aggregate stats
+- `GET /api/analytics/projects?days=N` — per-project breakdown
+- `GET /api/analytics/throughput?days=N` — daily run counts
+- `GET /api/analytics/failures?days=N&project=X` — failure cause breakdown
 
-Nothing — all features implemented, review feedback addressed, tests pass, type check clean.
+All endpoints cap days at 365 and default to 30.
 
-## Blockers
+### 3. Dashboard charts (`orchestrator/board/index.html`)
+- Stat cards: Total Runs, Success Rate, Avg Duration, Avg Sessions, Retry Rate
+- Throughput bar chart: stacked green (success) / red (failed) bars per day
+- Project breakdown: horizontal bars color-coded by success rate
+- Auto-refreshes every 60 seconds
 
-None.
+### 4. Tests (`orchestrator/src/db.test.ts`)
+- Comprehensive tests for all four analytics functions
+- Tests for empty state, correct aggregation, fix run exclusion, project grouping, date grouping, error categorization, project filtering
+
+## Verification
+- 203 tests pass, 0 failures
+- TypeScript type check passes with no errors
+- Zero new dependencies (pure CSS/SVG charts)
+
+## What's left
+Nothing — all design requirements are implemented and tested.
+
+## Decisions
+- Used direct SQL inserts in test helper (`createAnalyticsRun`) for full control over timestamps and fields
+- Followed existing codebase patterns for prepared statements and query structure
