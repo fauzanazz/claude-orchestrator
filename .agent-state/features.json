@@ -8,12 +8,12 @@
   { "name": "skip-existing-pr-runs", "description": "Skip review gate for runs that already have a PR", "passes": true },
   { "name": "comment-exit-check", "description": "Check gh pr comment exit status before enqueueing revision", "passes": true },
   { "name": "review-gate-tests", "description": "Unit tests for formatReviewFeedback", "passes": true },
-  { "name": "sqlite-table", "description": "Create project_intelligence SQLite table with project+metric composite PK", "passes": false },
-  { "name": "quantitative-metrics", "description": "Compute avg duration, avg sessions, success rate, total runs from run history", "passes": false },
-  { "name": "common-failures", "description": "Extract and deduplicate common failure patterns from recent failed runs", "passes": false },
-  { "name": "gemini-insights", "description": "Use Gemini Flash 2 to extract qualitative insights from run logs", "passes": false },
-  { "name": "metric-persistence", "description": "Upsert/read metrics with staleness tracking for periodic refresh", "passes": false },
-  { "name": "prompt-injection", "description": "Build intelligence section and inject into agent prompts via buildAgentPrompt", "passes": false },
-  { "name": "post-run-update", "description": "Call updateProjectIntelligence after run completion (success and failure)", "passes": false },
-  { "name": "tests", "description": "Unit tests for metric computation, prompt building, and integration", "passes": false }
+  { "name": "sqlite-table", "description": "Create project_intelligence SQLite table with project+metric composite PK", "passes": true },
+  { "name": "quantitative-metrics", "description": "Compute avg duration, avg sessions, success rate, total runs from run history", "passes": true },
+  { "name": "common-failures", "description": "Extract and deduplicate common failure patterns from recent failed runs", "passes": true },
+  { "name": "gemini-insights", "description": "Use Gemini Flash 2 to extract qualitative insights from run logs", "passes": true },
+  { "name": "metric-persistence", "description": "Upsert/read metrics with staleness tracking for periodic refresh", "passes": true },
+  { "name": "prompt-injection", "description": "Build intelligence section and inject into agent prompts via buildAgentPrompt", "passes": true },
+  { "name": "post-run-update", "description": "Call updateProjectIntelligence after run completion (success and failure)", "passes": true },
+  { "name": "tests", "description": "Unit tests for metric computation, prompt building, and integration", "passes": true }
 ]
