@@ -1251,17 +1251,29 @@ export async function executeRun(
         if (!reviewResult.pass && prNum) {
           // Post review feedback as PR comment — must succeed before revision reads it
           const feedback = formatReviewFeedback(reviewResult);
-          const commentProc = Bun.spawn(
-            ['gh', 'pr', 'comment', String(prNum), '--repo', issue.repo, '--body', `### AI Auto-Review\n\n${feedback}`],
-            { stdout: 'pipe', stderr: 'pipe' },
-          );
-          const commentExitCode = await commentProc.exited;
+          const commentArgs = ['gh', 'pr', 'comment', String(prNum), '--repo', issue.repo, '--body', `### AI Auto-Review\n\n${feedback}`];
 
-          if (commentExitCode !== 0) {
-            bufferLog(runId, 'system',
-              `[runner] Auto-review: failed to post PR comment (exit ${commentExitCode}) — skipping revision`
-            );
-          } else {
+          let commentPosted = false;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const commentProc = Bun.spawn(commentArgs, { stdout: 'pipe', stderr: 'pipe' });
+            const commentExitCode = await commentProc.exited;
+            if (commentExitCode === 0) {
+              commentPosted = true;
+              break;
+            }
+            if (attempt === 0) {
+              bufferLog(runId, 'system',
+                `[runner] Auto-review: PR comment failed (exit ${commentExitCode}), retrying...`
+              );
+              await Bun.sleep(2000);
+            } else {
+              bufferLog(runId, 'system',
+                `[runner] Auto-review: PR comment retry failed (exit ${commentExitCode}) — skipping revision`
+              );
+            }
+          }
+
+          if (commentPosted) {
             // Trigger a revision run — AI feedback is now visible on the PR
             const revisionRunId = enqueueRevision(
               updatedRun ?? run,

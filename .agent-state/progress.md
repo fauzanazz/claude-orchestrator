@@ -4,7 +4,7 @@
 
 ## What was accomplished
 
-All review feedback from cubic-dev-ai across three review rounds has been addressed:
+All review feedback from cubic-dev-ai across four review rounds has been addressed:
 
 ### Round 1 fixes
 - **P2 review-gate.ts:115**: Removed `parsed.pass` from validation check — only `Array.isArray(parsed.issues)` is validated since `pass` is recomputed from error severity
@@ -18,6 +18,9 @@ All review feedback from cubic-dev-ai across three review rounds has been addres
 ### Round 3
 - Issues reference files outside FAU-54 scope (`db.ts`, `board/index.html`, `run-analytics-dashboard.md`, `cross-run-memory-injection.md`) — not addressed per scope discipline
 - `.agent-state` file issues were about prior state and are now correct
+
+### Round 4 fix
+- **P2 runner.ts:1231**: Added retry (1 attempt with 2s delay) for `gh pr comment` before giving up — transient `gh` failures no longer silently bypass the revision gate
 
 ## Implementation summary
 - `orchestrator/src/config.ts` — `autoReview` and `autoReviewModel` config flags
