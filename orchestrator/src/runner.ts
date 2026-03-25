@@ -1233,6 +1233,7 @@ export async function executeRun(
       config.autoReview &&
       !run.is_fix &&
       !run.is_revision &&
+      !run.pr_number &&
       run.retry_attempt === 0 &&
       worktreePath
     ) {
@@ -1248,11 +1249,15 @@ export async function executeRun(
         );
 
         if (!reviewResult.pass && prNum) {
-          // Post review feedback as PR comment
+          // Post review feedback as PR comment — await so comment exists before revision reads it
           const feedback = formatReviewFeedback(reviewResult);
-          commentOnPR(issue.repo, prNum, `### AI Auto-Review\n\n${feedback}`);
+          const commentProc = Bun.spawn(
+            ['gh', 'pr', 'comment', String(prNum), '--repo', issue.repo, '--body', `### AI Auto-Review\n\n${feedback}`],
+            { stdout: 'pipe', stderr: 'pipe' },
+          );
+          await commentProc.exited;
 
-          // Trigger a revision run with the AI feedback
+          // Trigger a revision run — AI feedback is now visible on the PR
           const revisionRunId = enqueueRevision(
             updatedRun ?? run,
             prNum,

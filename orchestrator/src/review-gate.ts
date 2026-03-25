@@ -111,8 +111,8 @@ Return ONLY valid JSON, no markdown fences.`;
   try {
     const parsed = JSON.parse(text.trim()) as ReviewResult;
 
-    // Validate structure
-    if (typeof parsed.pass !== 'boolean' || !Array.isArray(parsed.issues)) {
+    // Validate structure — only require issues array; pass is recomputed below
+    if (!Array.isArray(parsed.issues)) {
       return { pass: true, issues: [], summary: 'Skipped: invalid review response structure' };
     }
 
