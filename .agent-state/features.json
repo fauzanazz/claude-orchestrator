@@ -1,11 +1,11 @@
 [
-  { "name": "token-tracker-module", "description": "Create TokenTracker class that parses stream-json result events and accumulates token usage", "passes": true },
-  { "name": "db-token-columns", "description": "Add input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd columns to runs table", "passes": true },
-  { "name": "db-update-tokens-fn", "description": "Add updateRunTokens function to persist token data per run", "passes": true },
-  { "name": "db-cost-summary-fn", "description": "Add getCostSummary function for aggregate cost queries with project breakdown", "passes": true },
-  { "name": "run-type-token-fields", "description": "Add token tracking fields to Run interface in types.ts", "passes": true },
-  { "name": "runner-stream-callback", "description": "Add onRawLine callback to streamOutput for token parsing", "passes": true },
-  { "name": "runner-token-integration", "description": "Integrate TokenTracker into executeRun for both fix and normal runs", "passes": true },
-  { "name": "cost-api-endpoint", "description": "Add GET /api/cost endpoint for aggregate cost summaries", "passes": true },
-  { "name": "token-tracker-tests", "description": "Unit tests for TokenTracker parsing, accumulation, and cost estimation", "passes": true }
+  { "name": "config-flag", "description": "AUTO_REVIEW and AUTO_REVIEW_MODEL env var config", "passes": true },
+  { "name": "review-gate-module", "description": "review-gate.ts with reviewRun and formatReviewFeedback", "passes": true },
+  { "name": "runner-integration", "description": "Integrate review gate into executeRun after PR creation", "passes": true },
+  { "name": "skip-fix-runs", "description": "Skip review gate for fix runs", "passes": true },
+  { "name": "skip-revision-runs", "description": "Skip review gate for revision runs (prevent loops)", "passes": true },
+  { "name": "skip-retry-runs", "description": "Skip review gate for retry runs", "passes": true },
+  { "name": "skip-existing-pr-runs", "description": "Skip review gate for runs that already have a PR", "passes": true },
+  { "name": "comment-exit-check", "description": "Check gh pr comment exit status before enqueueing revision", "passes": true },
+  { "name": "review-gate-tests", "description": "Unit tests for formatReviewFeedback", "passes": true }
 ]

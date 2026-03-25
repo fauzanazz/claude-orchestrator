@@ -1,31 +1,36 @@
-# Token Cost Tracking — Progress
+# Progress — FAU-54: AI Auto-Review Gate
 
-## Completed
+## Status: Complete
 
-All features from the design document have been implemented:
+## What was accomplished
 
-1. **TokenTracker module** (`orchestrator/src/token-tracker.ts`) — Parses stream-json result events, accumulates tokens across sessions, estimates cost using per-model pricing table.
+All review feedback from cubic-dev-ai across four review rounds has been addressed:
 
-2. **DB schema migration** — Added 5 columns to `runs` table: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `cost_usd`. Uses ALTER TABLE with catch for idempotent migration.
+### Round 1 fixes
+- **P2 review-gate.ts:115**: Removed `parsed.pass` from validation check — only `Array.isArray(parsed.issues)` is validated since `pass` is recomputed from error severity
+- **P2 skip existing PR runs**: Added `!run.pr_number` guard to skip auto-review for runs that already have a PR
+- **P1 feedback passing**: PR comment is posted and awaited before enqueueing revision, ensuring feedback exists when revision agent reads PR comments
+- **P1 ordering**: `await commentProc.exited` runs before `enqueueRevision` call
 
-3. **DB functions** — `updateRunTokens()` persists token data per run. `getCostSummary(days)` returns aggregate stats with per-project breakdown.
+### Round 2 fix
+- **P1 runner.ts:1171**: Added exit code check on `gh pr comment` — revision is skipped with a log message if the comment fails to post
 
-4. **Type updates** — `Run` interface in `types.ts` includes all 5 token fields. All `insertRun` call sites updated (runner.ts x5, server.ts x1, db.test.ts x3).
+### Round 3
+- Issues reference files outside FAU-54 scope (`db.ts`, `board/index.html`, `run-analytics-dashboard.md`, `cross-run-memory-injection.md`) — not addressed per scope discipline
+- `.agent-state` file issues were about prior state and are now correct
 
-5. **Runner integration** — `streamOutput` accepts optional `onRawLine` callback. `TokenTracker` is created per `executeRun`, fed raw lines from stdout, and records totals on success and failure paths. Model is set from project config.
+### Round 4 fix
+- **P2 runner.ts:1231**: Added retry (1 attempt with 2s delay) for `gh pr comment` before giving up — transient `gh` failures no longer silently bypass the revision gate
 
-6. **Cost API** — `GET /api/cost?days=30` returns aggregate cost summary. Token fields also appear automatically in `/api/runs` responses.
+## Implementation summary
+- `orchestrator/src/config.ts` — `autoReview` and `autoReviewModel` config flags
+- `orchestrator/src/review-gate.ts` — `reviewRun()` and `formatReviewFeedback()`
+- `orchestrator/src/runner.ts` — Review gate integration after PR creation
+- `orchestrator/src/review-gate.test.ts` — Unit tests for `formatReviewFeedback`
 
-7. **Tests** — 12 unit tests for TokenTracker covering parsing, accumulation, cost estimation (sonnet/opus/unknown/cache), edge cases (invalid JSON, missing usage, missing fields).
+## Verification
+- 225 tests pass, 0 failures
+- TypeScript type check passes with no errors
 
-## Test Results
-
-- All 205 tests pass (including 12 new token-tracker tests)
-- No new type errors introduced (all tsc errors are pre-existing bun/node type issues)
-
-## Decisions
-
-- Token recording happens in the success path (before `hasLocalCommits`) and also in the catch block (for failed runs that consumed tokens)
-- Used `onRawLine` callback pattern on `streamOutput` rather than post-hoc log parsing — cleaner and doesn't require storing raw JSON
-- Cost is rounded to 4 decimal places
-- Default pricing uses Sonnet-level rates for unknown models
+## What's left
+Nothing — all in-scope review feedback has been addressed.
