@@ -1,45 +1,31 @@
-# Progress — FAU-50: Run Analytics API and Dashboard Charts
+# Token Cost Tracking — Progress
 
-## Status: Complete
+## Completed
 
-## What was accomplished
+All features from the design document have been implemented:
 
-All features from the design document have been implemented and verified:
+1. **TokenTracker module** (`orchestrator/src/token-tracker.ts`) — Parses stream-json result events, accumulates tokens across sessions, estimates cost using per-model pricing table.
 
-### 1. Analytics query functions (`orchestrator/src/db.ts`)
-- `getAnalyticsOverview(days)` — total runs, success/fail counts, success rate, avg duration, avg iterations, retry rate
-- `getProjectStats(days)` — same metrics grouped by project
-- `getDailyThroughput(days)` — daily run counts (total, success, failed)
-- `getFailureBreakdown(days, project?)` — error category classification with counts
+2. **DB schema migration** — Added 5 columns to `runs` table: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `cost_usd`. Uses ALTER TABLE with catch for idempotent migration.
 
-All queries exclude fix runs (`is_fix = 0`) and accept a configurable `days` parameter.
+3. **DB functions** — `updateRunTokens()` persists token data per run. `getCostSummary(days)` returns aggregate stats with per-project breakdown.
 
-### 2. REST API endpoints (`orchestrator/src/server.ts`)
-- `GET /api/analytics/overview?days=N` — aggregate stats
-- `GET /api/analytics/projects?days=N` — per-project breakdown
-- `GET /api/analytics/throughput?days=N` — daily run counts
-- `GET /api/analytics/failures?days=N&project=X` — failure cause breakdown
+4. **Type updates** — `Run` interface in `types.ts` includes all 5 token fields. All `insertRun` call sites updated (runner.ts x5, server.ts x1, db.test.ts x3).
 
-All endpoints cap days at 365 and default to 30.
+5. **Runner integration** — `streamOutput` accepts optional `onRawLine` callback. `TokenTracker` is created per `executeRun`, fed raw lines from stdout, and records totals on success and failure paths. Model is set from project config.
 
-### 3. Dashboard charts (`orchestrator/board/index.html`)
-- Stat cards: Total Runs, Success Rate, Avg Duration, Avg Sessions, Retry Rate
-- Throughput bar chart: stacked green (success) / red (failed) bars per day
-- Project breakdown: horizontal bars color-coded by success rate
-- Auto-refreshes every 60 seconds
+6. **Cost API** — `GET /api/cost?days=30` returns aggregate cost summary. Token fields also appear automatically in `/api/runs` responses.
 
-### 4. Tests (`orchestrator/src/db.test.ts`)
-- Comprehensive tests for all four analytics functions
-- Tests for empty state, correct aggregation, fix run exclusion, project grouping, date grouping, error categorization, project filtering
+7. **Tests** — 12 unit tests for TokenTracker covering parsing, accumulation, cost estimation (sonnet/opus/unknown/cache), edge cases (invalid JSON, missing usage, missing fields).
 
-## Verification
-- 203 tests pass, 0 failures
-- TypeScript type check passes with no errors
-- Zero new dependencies (pure CSS/SVG charts)
+## Test Results
 
-## What's left
-Nothing — all design requirements are implemented and tested.
+- All 205 tests pass (including 12 new token-tracker tests)
+- No new type errors introduced (all tsc errors are pre-existing bun/node type issues)
 
 ## Decisions
-- Used direct SQL inserts in test helper (`createAnalyticsRun`) for full control over timestamps and fields
-- Followed existing codebase patterns for prepared statements and query structure
+
+- Token recording happens in the success path (before `hasLocalCommits`) and also in the catch block (for failed runs that consumed tokens)
+- Used `onRawLine` callback pattern on `streamOutput` rather than post-hoc log parsing — cleaner and doesn't require storing raw JSON
+- Cost is rounded to 4 decimal places
+- Default pricing uses Sonnet-level rates for unknown models

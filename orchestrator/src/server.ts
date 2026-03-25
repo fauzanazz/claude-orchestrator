@@ -10,6 +10,7 @@ import {
   isReviewProcessed, markReviewProcessed,
   countQueuedForIssue, getLatestRunTimeForIssue, countTotalQueued,
   getAnalyticsOverview, getProjectStats, getDailyThroughput, getFailureBreakdown,
+  getCostSummary,
 } from './db.ts';
 import {
   onSSE,
@@ -232,6 +233,12 @@ app.get('/api/runs/:id/logs', (c) => {
   return c.json(logs);
 });
 
+// GET /api/cost — token usage and cost summary
+app.get('/api/cost', (c) => {
+  const days = Math.min(parseInt(c.req.query('days') ?? '30', 10) || 30, 365);
+  return c.json(getCostSummary(days));
+});
+
 // POST /api/runs/:id/retry — re-enqueue a failed run
 app.post('/api/runs/:id/retry', async (c) => {
   const id = c.req.param('id');
@@ -302,6 +309,11 @@ app.post('/api/runs/:id/retry', async (c) => {
     iterations: 0,
     error_summary: null,
     pr_url: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
     design_path: original.design_path ?? null,
     issue_repo: original.issue_repo ?? null,
     base_branch: original.base_branch ?? null,

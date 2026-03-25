@@ -99,6 +99,13 @@ db.run(`
 // Migration: add resolved_at column to fix_tracking
 try { db.run('ALTER TABLE fix_tracking ADD COLUMN resolved_at TEXT'); } catch {}
 
+// Migrate: add token tracking columns
+try { db.run('ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.run('ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0'); } catch {}
+
 // Migration: add iterations column
 try {
   db.run(`ALTER TABLE runs ADD COLUMN iterations INTEGER NOT NULL DEFAULT 0`);
@@ -291,6 +298,74 @@ const stmtUpdateRunIterations = db.prepare<void, [number, string]>(
 
 export function updateRunIterations(id: string, iterations: number): void {
   stmtUpdateRunIterations.run(iterations, id);
+}
+
+// ---------------------------------------------------------------------------
+// Token tracking
+// ---------------------------------------------------------------------------
+
+const stmtUpdateRunTokens = db.prepare<void, [number, number, number, number, number, string]>(`
+  UPDATE runs
+  SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ?, cost_usd = ?
+  WHERE id = ?
+`);
+
+export function updateRunTokens(
+  id: string,
+  tokens: { input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_creation_tokens: number; cost_usd: number },
+): void {
+  stmtUpdateRunTokens.run(
+    tokens.input_tokens, tokens.output_tokens,
+    tokens.cache_read_tokens, tokens.cache_creation_tokens,
+    tokens.cost_usd, id,
+  );
+}
+
+export interface CostSummary {
+  total_cost_usd: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_read_tokens: number;
+  total_runs_with_cost: number;
+  avg_cost_per_run: number;
+  by_project: Array<{ project: string; total_cost: number; run_count: number }>;
+}
+
+export function getCostSummary(days: number): CostSummary {
+  const totals = db.prepare<{
+    total_cost: number; total_input: number; total_output: number;
+    total_cache: number; run_count: number;
+  }, [number]>(`
+    SELECT
+      COALESCE(SUM(cost_usd), 0) as total_cost,
+      COALESCE(SUM(input_tokens), 0) as total_input,
+      COALESCE(SUM(output_tokens), 0) as total_output,
+      COALESCE(SUM(cache_read_tokens), 0) as total_cache,
+      COUNT(CASE WHEN cost_usd > 0 THEN 1 END) as run_count
+    FROM runs
+    WHERE created_at >= datetime('now', '-' || ? || ' days')
+  `).get(days);
+
+  const byProject = db.prepare<{ project: string; total_cost: number; run_count: number }, [number]>(`
+    SELECT
+      project,
+      ROUND(COALESCE(SUM(cost_usd), 0), 4) as total_cost,
+      COUNT(*) as run_count
+    FROM runs
+    WHERE created_at >= datetime('now', '-' || ? || ' days') AND cost_usd > 0
+    GROUP BY project
+    ORDER BY total_cost DESC
+  `).all(days);
+
+  return {
+    total_cost_usd: Math.round((totals?.total_cost ?? 0) * 10000) / 10000,
+    total_input_tokens: totals?.total_input ?? 0,
+    total_output_tokens: totals?.total_output ?? 0,
+    total_cache_read_tokens: totals?.total_cache ?? 0,
+    total_runs_with_cost: totals?.run_count ?? 0,
+    avg_cost_per_run: totals?.run_count ? Math.round(((totals?.total_cost ?? 0) / totals.run_count) * 10000) / 10000 : 0,
+    by_project: byProject,
+  };
 }
 
 export function markStaleRunsFailed(): void {
