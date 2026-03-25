@@ -67,20 +67,28 @@ db.run(`
   );
 `);
 
-// Migrate: add fix columns to runs table
-try { db.run('ALTER TABLE runs ADD COLUMN is_fix INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN fix_type TEXT'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0'); } catch {}
-
-// Migrate: add retry_attempt column for auto-retry
-try { db.run('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0'); } catch (e: any) {
-  if (!String(e?.message).includes('duplicate column')) throw e;
+// Safe migration helper: only swallows "duplicate column" errors, rethrows everything else
+function migrateAddColumn(sql: string): void {
+  try {
+    db.run(sql);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('duplicate column')) throw err;
+  }
 }
 
+// Migrate: add fix columns to runs table
+migrateAddColumn('ALTER TABLE runs ADD COLUMN is_fix INTEGER NOT NULL DEFAULT 0');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN fix_type TEXT');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN fix_attempt INTEGER NOT NULL DEFAULT 0');
+
+// Migrate: add retry_attempt column for auto-retry
+migrateAddColumn('ALTER TABLE runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 0');
+
 // Migrate: add issue metadata columns for restart persistence
-try { db.run('ALTER TABLE runs ADD COLUMN design_path TEXT'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN issue_repo TEXT'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN base_branch TEXT'); } catch {}
+migrateAddColumn('ALTER TABLE runs ADD COLUMN design_path TEXT');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN issue_repo TEXT');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN base_branch TEXT');
 
 db.run(`
   CREATE TABLE IF NOT EXISTS fix_tracking (
@@ -97,24 +105,17 @@ db.run(`
 `);
 
 // Migration: add resolved_at column to fix_tracking
-try { db.run('ALTER TABLE fix_tracking ADD COLUMN resolved_at TEXT'); } catch {}
+migrateAddColumn('ALTER TABLE fix_tracking ADD COLUMN resolved_at TEXT');
 
 // Migrate: add token tracking columns
-try { db.run('ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0'); } catch {}
-try { db.run('ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0'); } catch {}
+migrateAddColumn('ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0');
+migrateAddColumn('ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0');
 
 // Migration: add iterations column
-try {
-  db.run(`ALTER TABLE runs ADD COLUMN iterations INTEGER NOT NULL DEFAULT 0`);
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (!msg.includes('duplicate column')) {
-    throw err;
-  }
-}
+migrateAddColumn('ALTER TABLE runs ADD COLUMN iterations INTEGER NOT NULL DEFAULT 0');
 
 // Prepared statements
 const stmtInsertRun = db.prepare<void, [
@@ -321,7 +322,7 @@ export function updateRunTokens(
   );
 }
 
-export interface CostSummary {
+interface CostSummary {
   total_cost_usd: number;
   total_input_tokens: number;
   total_output_tokens: number;
@@ -484,7 +485,7 @@ export function markFixExhausted(repo: string, prNumber: number, fixType: string
     .run(repo, prNumber, fixType);
 }
 
-export function clearFixTracking(repo: string, prNumber: number, fixType: string): void {
+export function resolveFixTracking(repo: string, prNumber: number, fixType: string): void {
   stmtClearFixTracking.run(repo, prNumber, fixType);
 }
 
@@ -599,7 +600,7 @@ export function snapshotDatabase(maxSnapshots: number): string | null {
 // Rate limiting: retry tracking queries
 // ---------------------------------------------------------------------------
 
-const stmtCountRetriesForIssue = db.prepare<{ count: number }, [string]>(`
+const stmtCountQueuedForIssue = db.prepare<{ count: number }, [string]>(`
   SELECT COUNT(*) as count FROM runs
   WHERE issue_id = ? AND status = 'queued'
 `);
@@ -611,7 +612,7 @@ const stmtLatestRetryTime = db.prepare<{ created_at: string } | null, [string, s
 `);
 
 export function countQueuedForIssue(issueId: string): number {
-  return stmtCountRetriesForIssue.get(issueId)?.count ?? 0;
+  return stmtCountQueuedForIssue.get(issueId)?.count ?? 0;
 }
 
 export function getLatestRunTimeForIssue(issueId: string, excludeRunId: string): string | null {

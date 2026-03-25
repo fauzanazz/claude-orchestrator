@@ -10,7 +10,7 @@ export interface ReviewResult {
   summary: string;
 }
 
-export interface ReviewIssue {
+interface ReviewIssue {
   severity: 'error' | 'warning' | 'suggestion';
   category: string;
   description: string;
@@ -22,7 +22,7 @@ export interface ReviewIssue {
  * Returns a ReviewResult indicating whether the PR passes or needs revisions.
  */
 export async function reviewRun(
-  run: Run,
+  _run: Run,
   issue: Issue,
   worktreePath: string,
 ): Promise<ReviewResult> {

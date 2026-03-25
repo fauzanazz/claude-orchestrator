@@ -1,4 +1,6 @@
-import { join } from 'path';
+import { join } from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
+import type { ProjectConfig, ProjectsConfig } from './types.ts';
 
 const required = {
   PROJECTS_CONFIG_PATH: process.env.PROJECTS_CONFIG_PATH,
@@ -31,7 +33,14 @@ export const config = {
   githubUsername: required.GITHUB_USERNAME as string,
 
   claudeCodePath: process.env.CLAUDE_CODE_PATH ?? 'claude',
-  logLevel: (process.env.LOG_LEVEL ?? 'info') as 'debug' | 'info' | 'warn' | 'error',
+  logLevel: (() => {
+    const raw = process.env.LOG_LEVEL ?? 'info';
+    const valid = ['debug', 'info', 'warn', 'error'] as const;
+    if (!valid.includes(raw as typeof valid[number])) {
+      throw new Error(`Invalid LOG_LEVEL: "${raw}" (must be one of: ${valid.join(', ')})`);
+    }
+    return raw as typeof valid[number];
+  })(),
   defaultModel: process.env.DEFAULT_MODEL ?? null as string | null,
   defaultFixModel: process.env.DEFAULT_FIX_MODEL ?? null as string | null,
   maxConcurrentAgents: parseIntEnv('MAX_CONCURRENT_AGENTS', 2),
@@ -54,12 +63,12 @@ export const config = {
   tunnelName: process.env.TUNNEL_NAME,
   tunnelHostname: process.env.TUNNEL_HOSTNAME,
 
-  notifyPollIntervalMs: parseInt(process.env.NOTIFY_POLL_INTERVAL_MS ?? '120000', 10),
+  notifyPollIntervalMs: parseIntEnv('NOTIFY_POLL_INTERVAL_MS', 120000),
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
-  maxFixRetries: parseInt(process.env.MAX_FIX_RETRIES ?? '3', 10),
+  maxFixRetries: parseIntEnv('MAX_FIX_RETRIES', 3),
   maxRunRetries: parseIntEnv('MAX_RUN_RETRIES', 3),
   runRetryDelayMs: parseIntEnv('RUN_RETRY_DELAY_MS', 30000),
-  fixPollIntervalMs: parseInt(process.env.FIX_POLL_INTERVAL_MS ?? '120000', 10),
+  fixPollIntervalMs: parseIntEnv('FIX_POLL_INTERVAL_MS', 120000),
   fixCooldownMs: parseIntEnv('FIX_COOLDOWN_MS', 300000),
 
   logRetentionDays: parseIntEnv('LOG_RETENTION_DAYS', 30),
@@ -77,3 +86,36 @@ export const config = {
   autoReview: process.env.AUTO_REVIEW === 'true',
   autoReviewModel: process.env.AUTO_REVIEW_MODEL ?? 'gemini-2.0-flash',
 };
+
+// ---------------------------------------------------------------------------
+// Project resolution (moved from runner.ts to break import cycle)
+// ---------------------------------------------------------------------------
+
+let _projectsCache: ProjectsConfig | null = null;
+let _projectsMtime: number = 0;
+
+export function loadProjects(): ProjectsConfig {
+  const stat = statSync(config.projectsConfigPath);
+  const mtime = stat.mtimeMs;
+  if (_projectsCache && mtime === _projectsMtime) {
+    return _projectsCache;
+  }
+  const raw = readFileSync(config.projectsConfigPath, 'utf-8');
+  _projectsCache = JSON.parse(raw) as ProjectsConfig;
+  _projectsMtime = mtime;
+  return _projectsCache;
+}
+
+export function resolveProject(
+  repo: string,
+): { key: string; project: ProjectConfig } | null {
+  const projects = loadProjects();
+
+  for (const [key, project] of Object.entries(projects)) {
+    if (project.repo === repo) {
+      return { key, project };
+    }
+  }
+
+  return null;
+}

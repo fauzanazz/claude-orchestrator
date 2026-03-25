@@ -1,7 +1,8 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { log } from './logger.ts';
 import { monotonicFactory } from 'ulid';
-import { config } from './config.ts';
+import { config, loadProjects, resolveProject } from './config.ts';
 import { documentRun, readProjectMemory } from './memory.ts';
 import { TokenTracker } from './token-tracker.ts';
 import { reviewRun, formatReviewFeedback } from './review-gate.ts';
@@ -21,7 +22,7 @@ import {
   getFixTracking,
   upsertFixTracking,
   markFixExhausted,
-  clearFixTracking,
+  resolveFixTracking,
   deleteFixTracking,
   getRunByPRNumber,
   getIssueForRun,
@@ -68,12 +69,39 @@ import type {
   LinearIssue,
   ParsedIssueMetadata,
   ProjectConfig,
-  ProjectsConfig,
   SSEEvent,
   FixType,
 } from './types.ts';
 
 const ulid = monotonicFactory();
+
+type NewRun = Omit<Run, 'created_at' | 'started_at' | 'completed_at'>;
+
+export function createRunRecord(overrides: Partial<NewRun> & Pick<NewRun, 'project' | 'issue_id' | 'issue_key' | 'issue_title' | 'branch' | 'worktree_path'>): NewRun {
+  return {
+    id: ulid(),
+    status: 'queued',
+    is_revision: 0,
+    is_fix: 0,
+    fix_type: null,
+    fix_attempt: 0,
+    retry_attempt: 0,
+    pr_number: null,
+    agent_pid: null,
+    iterations: 0,
+    error_summary: null,
+    pr_url: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
+    design_path: null,
+    issue_repo: null,
+    base_branch: null,
+    ...overrides,
+  };
+}
 
 export function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -160,6 +188,7 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
   try {
     token = readFileSync(tokenPath, 'utf-8').trim();
   } catch {
+    log.debug(`[runner] Linear API token not found at ${tokenPath} — skipping parent lookup`);
     return null;
   }
 
@@ -174,7 +203,7 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
     const json = await resp.json() as { data?: { issue?: { parent?: { id: string; identifier: string } | null } } };
     return json.data?.issue?.parent ?? null;
   } catch (err) {
-    console.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${err instanceof Error ? err.message : err}`);
     return null;
   }
 }
@@ -214,7 +243,7 @@ export async function pollLinear(): Promise<LinearIssue[]> {
         try {
           readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
         } catch (err) {
-          console.warn(`[runner] lineark read failed for ${identifier}: ${err instanceof Error ? err.message : err}`);
+          log.warn(`[runner] lineark read failed for ${identifier}: ${err instanceof Error ? err.message : err}`);
           return null;
         }
 
@@ -222,13 +251,13 @@ export async function pollLinear(): Promise<LinearIssue[]> {
         try {
           detailJson = JSON.parse(readOut);
         } catch {
-          console.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
+          log.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
           return null;
         }
 
         const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
         if (!detailResult.success) {
-          console.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
+          log.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
           return null;
         }
         const full = detailResult.data;
@@ -240,7 +269,7 @@ export async function pollLinear(): Promise<LinearIssue[]> {
         // "In Progress" issues are only re-picked if the orchestrator previously ran them
         // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
         if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
-          console.log(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
+          log.info(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
           return null;
         }
 
@@ -249,7 +278,7 @@ export async function pollLinear(): Promise<LinearIssue[]> {
         if (parent?.identifier) {
           const done = await isParentDone(parent.identifier);
           if (!done) {
-            console.log(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
+            log.info(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
             return null;
           }
         }
@@ -368,7 +397,7 @@ async function getIssueState(identifier: string): Promise<string | null> {
     }
     return state ?? null;
   } catch {
-    console.warn(`[runner] Failed to read state for ${identifier}`);
+    log.warn(`[runner] Failed to read state for ${identifier}`);
     return null;
   }
 }
@@ -381,38 +410,7 @@ async function isParentDone(parentIdentifier: string): Promise<boolean> {
   return doneStates.includes(state.toLowerCase());
 }
 
-// ---------------------------------------------------------------------------
-// Project resolution
-// ---------------------------------------------------------------------------
-
-let _projectsCache: ProjectsConfig | null = null;
-let _projectsMtime: number = 0;
-
-export function loadProjects(): ProjectsConfig {
-  const stat = statSync(config.projectsConfigPath);
-  const mtime = stat.mtimeMs;
-  if (_projectsCache && mtime === _projectsMtime) {
-    return _projectsCache;
-  }
-  const raw = readFileSync(config.projectsConfigPath, 'utf-8');
-  _projectsCache = JSON.parse(raw) as ProjectsConfig;
-  _projectsMtime = mtime;
-  return _projectsCache;
-}
-
-export function resolveProject(
-  repo: string,
-): { key: string; project: ProjectConfig } | null {
-  const projects = loadProjects();
-
-  for (const [key, project] of Object.entries(projects)) {
-    if (project.repo === repo) {
-      return { key, project };
-    }
-  }
-
-  return null;
-}
+// loadProjects and resolveProject live in config.ts
 
 // ---------------------------------------------------------------------------
 // Issue reconstruction (from DB run record via Linear)
@@ -539,7 +537,7 @@ export function buildRulesSection(issue: Issue, isRevision: boolean): string {
     '',
     `- **Branch**: \`${issue.branch}\``,
     `- **Issue**: ${issue.key} — ${issue.title}`,
-    '- All commits must reference the issue key in the message, e.g. `[${issue.key}] feat: description`.',
+    `- All commits must reference the issue key in the message, e.g. \`[${issue.key}] feat: description\`.`,
     '- Only modify files relevant to the scope described in the design document.',
     '- Do not modify unrelated files, configuration, or documentation outside the design scope.',
     '- Do not push — the orchestrator handles git push.',
@@ -586,7 +584,7 @@ export async function buildAgentPrompt(
       });
       if (memory) sections.push(memory);
     } catch (err) {
-      console.warn(`[runner] Memory injection failed for ${projectKey}: ${err instanceof Error ? err.message : err}`);
+      log.warn(`[runner] Memory injection failed for ${projectKey}: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -942,7 +940,7 @@ export async function executeRun(
           bufferLog(runId, 'system', `[runner] Rebase succeeded cleanly, force-pushing`);
           await forcePushFromWorktree(worktreePath, issue.branch);
           updateRunStatus(runId, 'success', { completed_at: new Date().toISOString(), pr_url: `https://github.com/${issue.repo}/pull/${run.pr_number}`, pr_number: run.pr_number });
-          clearFixTracking(issue.repo, run.pr_number!, run.fix_type);
+          resolveFixTracking(issue.repo, run.pr_number!, run.fix_type);
           bufferLog(runId, 'system', `[runner] Conflict resolved via clean rebase`);
           return;
         }
@@ -1217,7 +1215,7 @@ export async function executeRun(
     });
     if (run.is_fix) {
       commentOnIssue(issue.key, `Fix applied (${run.fix_type}, attempt ${run.fix_attempt}): ${prUrl}`);
-      if (run.fix_type) clearFixTracking(issue.repo, prNum ?? run.pr_number!, run.fix_type);
+      if (run.fix_type) resolveFixTracking(issue.repo, prNum ?? run.pr_number!, run.fix_type);
     } else {
       updateLinearStatus(issue.key, 'In Review');
       commentOnIssue(issue.key, `PR ready for review: ${prUrl}`);
@@ -1294,7 +1292,7 @@ export async function executeRun(
     // Document the run to obsidian-memory (fire-and-forget, before worktree cleanup)
     if (worktreePath && updatedRun) {
       await documentRun(updatedRun, issue, worktreePath).catch((e) =>
-        console.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+        log.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
       );
     }
 
@@ -1329,7 +1327,7 @@ export async function executeRun(
         // Pass failedRun (has error_summary) so buildRetryContext can read it.
         const retryRunId = enqueueRetry(failedRun ?? run, issue, config.runRetryDelayMs);
         if (retryRunId) {
-          console.log(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
+          log.info(`[runner] Enqueued retry ${retryLabel} as run ${retryRunId} for ${issue.key}`);
         }
       } else {
         updateLinearStatus(issue.key, 'Failed');
@@ -1348,7 +1346,7 @@ export async function executeRun(
     // Document failed run to obsidian-memory (before worktree cleanup)
     if (worktreePath && failedRun) {
       await documentRun(failedRun, issue, worktreePath).catch((e) =>
-        console.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+        log.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
       );
     }
 
@@ -1366,21 +1364,17 @@ export async function executeRun(
 // ---------------------------------------------------------------------------
 
 const queue: Run[] = [];
-let running = 0;
+let activeRunCount = 0;
 let shuttingDown = false;
-
-export function isShuttingDown(): boolean {
-  return shuttingDown;
-}
 
 export function beginShutdown(): void {
   shuttingDown = true;
   queue.length = 0; // Clear pending queue
-  console.log('[runner] Shutdown initiated — no new runs will start');
+  log.info('[runner] Shutdown initiated — no new runs will start');
 }
 
 export function getRunningCount(): number {
-  return running;
+  return activeRunCount;
 }
 
 export function flushAllLogs(): void {
@@ -1435,7 +1429,7 @@ export function buildRetryContext(failedRun: Run): string {
 
 export function enqueue(run: Run): boolean {
   if (queue.length >= config.maxQueueSize) {
-    console.warn(`[runner] Queue full (${queue.length}/${config.maxQueueSize}), rejecting run ${run.id}`);
+    log.warn(`[runner] Queue full (${queue.length}/${config.maxQueueSize}), rejecting run ${run.id}`);
     updateRunStatus(run.id, 'failed', {
       error_summary: 'Queue full — run rejected',
       completed_at: new Date().toISOString(),
@@ -1456,34 +1450,19 @@ export function enqueueWithIssue(run: Run, issue: Issue): boolean {
 }
 
 export function enqueueRevision(originalRun: Run, prNumber: number, issue: Issue): string {
-  const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
-    id: ulid(),
+  const newRun = createRunRecord({
     project: originalRun.project,
     issue_id: originalRun.issue_id,
     issue_key: originalRun.issue_key,
     issue_title: originalRun.issue_title,
     branch: originalRun.branch,
     worktree_path: originalRun.worktree_path,
-    status: 'queued',
     is_revision: 1,
-    is_fix: 0,
-    fix_type: null,
-    fix_attempt: 0,
-    retry_attempt: 0,
     pr_number: prNumber,
-    agent_pid: null,
-    iterations: 0,
-    error_summary: null,
-    pr_url: null,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_creation_tokens: 0,
-    cost_usd: 0,
     design_path: issue.designPath,
     issue_repo: issue.repo,
     base_branch: issue.baseBranch,
-  };
+  });
 
   insertRun(newRun);
 
@@ -1510,34 +1489,20 @@ export function enqueueRetry(
   // Build retry context from the failed run BEFORE logs are flushed
   const retryContext = buildRetryContext(failedRun);
 
-  const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
-    id: ulid(),
+  const newRun = createRunRecord({
     project: failedRun.project,
     issue_id: failedRun.issue_id,
     issue_key: failedRun.issue_key,
     issue_title: failedRun.issue_title,
     branch: failedRun.branch,
     worktree_path: failedRun.worktree_path,
-    status: 'queued',
     is_revision: failedRun.is_revision,
-    is_fix: 0,
-    fix_type: null,
-    fix_attempt: 0,
     retry_attempt: nextAttempt,
     pr_number: failedRun.pr_number,
-    agent_pid: null,
-    iterations: 0,
-    error_summary: null,
-    pr_url: null,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_creation_tokens: 0,
-    cost_usd: 0,
     design_path: failedRun.design_path ?? null,
     issue_repo: failedRun.issue_repo ?? null,
     base_branch: failedRun.base_branch ?? null,
-  };
+  });
 
   // Insert into DB immediately so hasActiveRunForIssue() sees it
   // and the poll loop won't spawn a duplicate run during the delay.
@@ -1573,34 +1538,21 @@ export function enqueueFix(
   fixType: FixType,
   attempt: number,
 ): string {
-  const newRun: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
-    id: ulid(),
+  const newRun = createRunRecord({
     project: originalRun.project,
     issue_id: originalRun.issue_id,
     issue_key: originalRun.issue_key,
     issue_title: originalRun.issue_title,
     branch: originalRun.branch,
     worktree_path: originalRun.worktree_path,
-    status: 'queued',
-    is_revision: 0,
     is_fix: 1,
     fix_type: fixType,
     fix_attempt: attempt,
-    retry_attempt: 0,
     pr_number: prNumber,
-    agent_pid: null,
-    iterations: 0,
-    error_summary: null,
-    pr_url: null,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_creation_tokens: 0,
-    cost_usd: 0,
     design_path: issue.designPath,
     issue_repo: issue.repo,
     base_branch: issue.baseBranch,
-  };
+  });
 
   insertRun(newRun);
 
@@ -1615,13 +1567,13 @@ export function enqueueFix(
   return newRun.id;
 }
 
-export async function tick(): Promise<void> {
+export async function dispatchNextRun(): Promise<void> {
   if (shuttingDown) return;
-  if (running >= config.maxConcurrentAgents) return;
+  if (activeRunCount >= config.maxConcurrentAgents) return;
   if (queue.length === 0) return;
 
   const run = queue.shift()!;
-  running++;
+  activeRunCount++;
 
   // Look up issue metadata: try in-memory map first (for in-flight runs),
   // then fall back to DB-persisted columns (for runs surviving a restart).
@@ -1631,12 +1583,12 @@ export async function tick(): Promise<void> {
   }
 
   if (!issueData) {
-    console.error(`[runner] tick: no issue data for run ${run.id}`);
+    log.error(`[runner] tick: no issue data for run ${run.id}`);
     updateRunStatus(run.id, 'failed', {
       error_summary: 'Internal: issue metadata not found for run',
       completed_at: new Date().toISOString(),
     });
-    running--;
+    activeRunCount--;
     return;
   }
 
@@ -1644,22 +1596,22 @@ export async function tick(): Promise<void> {
   const resolved = resolveProject(issueData.repo);
 
   if (!resolved) {
-    console.error(`[runner] tick: could not resolve project for repo "${issueData.repo}" (run ${run.id})`);
+    log.error(`[runner] tick: could not resolve project for repo "${issueData.repo}" (run ${run.id})`);
     updateRunStatus(run.id, 'failed', {
       error_summary: `Project not found in registry for repo: ${issueData.repo}`,
       completed_at: new Date().toISOString(),
     });
-    running--;
+    activeRunCount--;
     return;
   }
 
   // Fire and forget
   executeRun(run, resolved.project, resolved.key, issueData)
     .catch((err) => {
-      console.error(`[runner] Unhandled error in executeRun for ${run.id}:`, err);
+      log.error(`[runner] Unhandled error in executeRun for ${run.id}:`, err);
     })
     .finally(() => {
-      running--;
+      activeRunCount--;
       issueMap.delete(run.id);
     });
 }
@@ -1716,17 +1668,17 @@ export async function pollReviews(): Promise<void> {
       if (prData.state === 'MERGED') {
         updateRunStatus(run.id, 'merged');
         updateLinearStatus(run.issue_key, 'Done');
-        console.log(`[reviewer] PR #${run.pr_number} merged — marked ${run.issue_key} as Done`);
+        log.info(`[reviewer] PR #${run.pr_number} merged — marked ${run.issue_key} as Done`);
         // Proactively rebase sibling PRs to prevent conflict cascade
         proactiveRebaseSiblings(run).catch((err) =>
-          console.error(`[rebase] Error rebasing siblings after ${run.issue_key} merge:`, err),
+          log.error(`[rebase] Error rebasing siblings after ${run.issue_key} merge:`, err),
         );
         continue;
       }
       if (prData.state === 'CLOSED') {
         updateRunStatus(run.id, 'closed');
         updateLinearStatus(run.issue_key, 'Canceled');
-        console.log(`[reviewer] PR #${run.pr_number} closed — marked ${run.issue_key} as Canceled`);
+        log.info(`[reviewer] PR #${run.pr_number} closed — marked ${run.issue_key} as Canceled`);
         continue;
       }
       if (prData.state !== 'OPEN') continue;
@@ -1761,12 +1713,12 @@ export async function pollReviews(): Promise<void> {
         // Only mark review as processed if the run was actually inserted
         // (INSERT OR IGNORE may skip if a queued run already exists for this issue)
         if (!getRun(revisionRunId)) {
-          console.warn(`[reviewer] Revision run ${revisionRunId} was not inserted (duplicate?), skipping review ${reviewId}`);
+          log.warn(`[reviewer] Revision run ${revisionRunId} was not inserted (duplicate?), skipping review ${reviewId}`);
           continue;
         }
         markReviewProcessed(reviewId, run.pr_number!, repo, revisionRunId);
 
-        console.log(
+        log.info(
           `[reviewer] Enqueued revision ${revisionRunId} for PR #${run.pr_number} ` +
           `(review ${reviewId}, state: ${state})`
         );
@@ -1775,7 +1727,7 @@ export async function pollReviews(): Promise<void> {
         break;
       }
     } catch (err) {
-      console.error(`[reviewer] Error checking PR for run ${run.id}:`, err);
+      log.error(`[reviewer] Error checking PR for run ${run.id}:`, err);
     }
   }
 }
@@ -1794,7 +1746,7 @@ async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
 
   const baseBranch = mergedRun.base_branch ?? resolved.project.baseBranch;
 
-  console.log(
+  log.info(
     `[rebase] PR #${mergedRun.pr_number} merged in ${mergedRun.project} — ` +
     `proactively rebasing ${siblings.length} sibling PR(s)`,
   );
@@ -1809,16 +1761,16 @@ async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
         const result = await rebaseOnto(worktreePath, baseBranch);
         if (result.success) {
           await forcePushFromWorktree(worktreePath, sibling.branch);
-          console.log(`[rebase] Auto-rebased PR #${sibling.pr_number} (${sibling.issue_key}) onto ${baseBranch}`);
+          log.info(`[rebase] Auto-rebased PR #${sibling.pr_number} (${sibling.issue_key}) onto ${baseBranch}`);
         } else {
-          console.log(`[rebase] PR #${sibling.pr_number} (${sibling.issue_key}) has real conflicts — skipping (fixer will handle)`);
+          log.info(`[rebase] PR #${sibling.pr_number} (${sibling.issue_key}) has real conflicts — skipping (fixer will handle)`);
           await abortRebase(worktreePath);
         }
       } finally {
         cleanupWorktree(projectPath, worktreePath).catch(() => {});
       }
     } catch (err) {
-      console.warn(
+      log.warn(
         `[rebase] Failed to proactively rebase PR #${sibling.pr_number} (${sibling.issue_key}): ` +
         `${err instanceof Error ? err.message : err}`,
       );
@@ -1875,10 +1827,10 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
 
         if (currentAttempt > config.maxFixRetries) {
           markFixExhausted(repo, pr.number, fixType);
-          await sendFixExhaustedNotification(
-            repo, pr.number, pr.title, pr.url, fixType, config.maxFixRetries,
-          );
-          console.log(`[fixer] Fix attempts exhausted for PR #${pr.number} in ${repo} (${fixType})`);
+          await sendFixExhaustedNotification({
+            repo, prNumber: pr.number, title: pr.title, url: pr.url, fixType, attempts: config.maxFixRetries,
+          });
+          log.info(`[fixer] Fix attempts exhausted for PR #${pr.number} in ${repo} (${fixType})`);
           continue;
         }
 
@@ -1887,7 +1839,7 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
 
         if (fixType === 'merge_conflict') {
           // Try automatic rebase first
-          console.log(`[fixer] Attempting rebase for PR #${pr.number} in ${repo}`);
+          log.info(`[fixer] Attempting rebase for PR #${pr.number} in ${repo}`);
           if (!resolved) continue;
 
           const projectPath = await ensureProjectLocal(resolved.project, resolved.key);
@@ -1900,25 +1852,25 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
             if (rebaseResult.success) {
               // Rebase succeeded cleanly — force push
               await forcePushFromWorktree(worktreePath, issue.branch);
-              clearFixTracking(repo, pr.number, fixType);
-              console.log(`[fixer] Auto-rebase succeeded for PR #${pr.number} in ${repo}`);
+              resolveFixTracking(repo, pr.number, fixType);
+              log.info(`[fixer] Auto-rebase succeeded for PR #${pr.number} in ${repo}`);
             } else {
               // Rebase failed — abort and spawn agent
               await abortRebase(worktreePath);
               const fixRunId = enqueueFix(originalRun, pr.number, issue, fixType, currentAttempt);
-              console.log(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+              log.info(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
             }
           } finally {
             cleanupWorktree(projectPath, worktreePath).catch(() => {});
           }
         } else {
           // CI failure — spawn agent (it will fetch CI logs in its prompt)
-          console.log(`[fixer] CI failure detected for PR #${pr.number} in ${repo}`);
+          log.info(`[fixer] CI failure detected for PR #${pr.number} in ${repo}`);
           const fixRunId = enqueueFix(originalRun, pr.number, issue, 'ci_failure', currentAttempt);
-          console.log(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
+          log.info(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
         }
       } catch (err) {
-        console.error(`[fixer] Error checking PR #${pr.number} in ${repo}:`, err);
+        log.error(`[fixer] Error checking PR #${pr.number} in ${repo}:`, err);
       }
     }
   }
@@ -1929,7 +1881,7 @@ export async function pollFixable(prStatuses?: Map<string, import('./notify.ts')
 // ---------------------------------------------------------------------------
 
 export function startRunner(): void {
-  console.log('[runner] Starting orchestration engine');
+  log.info('[runner] Starting orchestration engine');
 
   // Mark any runs that were "running" when the process last died as failed
   markStaleRunsFailed();
@@ -1937,9 +1889,9 @@ export function startRunner(): void {
   // Re-enqueue any runs that are still "queued" in DB (survive restarts)
   const queuedRuns = getRunsByStatus('queued');
   if (queuedRuns.length > 0) {
-    console.log(`[runner] Re-queuing ${queuedRuns.length} persisted queued run(s)`);
+    log.info(`[runner] Re-queuing ${queuedRuns.length} persisted queued run(s)`);
     // Issue metadata is persisted in the runs table (design_path, issue_repo, base_branch),
-    // so tick() will reconstruct it via getIssueForRun() on the DB-fetched run.
+    // so dispatchNextRun() will reconstruct it via getIssueForRun() on the DB-fetched run.
     for (const run of queuedRuns) {
       enqueue(run);
     }
@@ -1955,14 +1907,14 @@ export function startRunner(): void {
         try {
           meta = parseIssueMetadata(linearIssue.description ?? '');
         } catch (err) {
-          console.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${err instanceof Error ? err.message : err}`);
+          log.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${err instanceof Error ? err.message : err}`);
           continue;
         }
         if (!meta) continue;
 
         const resolved = resolveProject(meta.repo);
         if (!resolved) {
-          console.warn(`[runner] poll: no project config for repo "${meta.repo}" (issue ${linearIssue.identifier})`);
+          log.warn(`[runner] poll: no project config for repo "${meta.repo}" (issue ${linearIssue.identifier})`);
           continue;
         }
 
@@ -1987,35 +1939,17 @@ export function startRunner(): void {
           `agent-${issue.key}-pending`,
         );
 
-        const runId = ulid();
-        const run: Omit<Run, 'created_at' | 'started_at' | 'completed_at'> = {
-          id: runId,
+        const run = createRunRecord({
           project: resolved.key,
           issue_id: issue.id,
           issue_key: issue.key,
           issue_title: issue.title,
           branch: issue.branch,
           worktree_path: worktreePath,
-          status: 'queued',
-          is_revision: 0,
-          is_fix: 0,
-          fix_type: null,
-          fix_attempt: 0,
-          retry_attempt: 0,
-          pr_number: null,
-          agent_pid: null,
-          iterations: 0,
-          error_summary: null,
-          pr_url: null,
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_read_tokens: 0,
-          cache_creation_tokens: 0,
-          cost_usd: 0,
           design_path: issue.designPath,
           issue_repo: issue.repo,
           base_branch: issue.baseBranch,
-        };
+        });
 
         // Skip if there's already an active (queued/running) run for this issue
         if (hasActiveRunForIssue(issue.id)) continue;
@@ -2023,16 +1957,16 @@ export function startRunner(): void {
         // insertRun uses INSERT OR IGNORE as a secondary safeguard
         insertRun(run);
 
-        const fullRun = getRun(runId);
+        const fullRun = getRun(run.id);
         if (!fullRun) continue; // was a duplicate, already queued/running
 
         enqueueWithIssue(fullRun, issue);
         broadcastSSE({ type: 'run_update', run: fullRun });
 
-        console.log(`[runner] Enqueued run ${runId} for ${issue.key}`);
+        log.info(`[runner] Enqueued run ${run.id} for ${issue.key}`);
       }
     } catch (err) {
-      console.error('[runner] Poll error:', err);
+      log.error('[runner] Poll error:', err);
     }
   }, config.pollIntervalMs);
 
@@ -2041,7 +1975,7 @@ export function startRunner(): void {
     try {
       await pollReviews();
     } catch (err) {
-      console.error('[reviewer] Poll error:', err);
+      log.error('[reviewer] Poll error:', err);
     }
   }, config.reviewPollIntervalMs);
 
@@ -2052,21 +1986,21 @@ export function startRunner(): void {
       await pollMergeReadiness(prStatuses);
       await pollFixable(prStatuses);
     } catch (err) {
-      console.error('[notify/fixer] Poll error:', err);
+      log.error('[notify/fixer] Poll error:', err);
     }
   }, config.fixPollIntervalMs);
 
-  // Tick every 5 seconds to dispatch queued runs
+  // Dispatch queued runs every 5 seconds
   setInterval(() => {
-    tick().catch((err) => console.error('[runner] tick error:', err));
+    dispatchNextRun().catch((err) => log.error('[runner] dispatch error:', err));
   }, 5_000);
 
   // Snapshot DB on startup
   try {
     const snap = snapshotDatabase(config.maxSnapshots);
-    if (snap) console.log(`[runner] DB snapshot saved: ${snap}`);
+    if (snap) log.info(`[runner] DB snapshot saved: ${snap}`);
   } catch (err) {
-    console.error('[runner] DB snapshot failed:', err);
+    log.error('[runner] DB snapshot failed:', err);
   }
 
   // Database cleanup: periodic retention enforcement
@@ -2075,12 +2009,12 @@ export function startRunner(): void {
 
   // Heartbeat: log orchestrator status every 60s
   setInterval(() => {
-    console.log(
-      `[heartbeat] queue=${queue.length} running=${running}/${config.maxConcurrentAgents}`,
+    log.info(
+      `[heartbeat] queue=${queue.length} running=${activeRunCount}/${config.maxConcurrentAgents}`,
     );
   }, 60_000);
 
-  console.log(
+  log.info(
     `[runner] Running. Poll interval: ${config.pollIntervalMs}ms, ` +
     `review poll: ${config.reviewPollIntervalMs}ms, ` +
     `fix poll: ${config.fixPollIntervalMs}ms, ` +
@@ -2094,7 +2028,7 @@ function runCleanup(): void {
   try {
     // Snapshot before deleting anything
     const snap = snapshotDatabase(config.maxSnapshots);
-    if (snap) console.log(`[cleanup] DB snapshot: ${snap}`);
+    if (snap) log.info(`[cleanup] DB snapshot: ${snap}`);
 
     const sizeBefore = getDatabaseSize();
 
@@ -2110,12 +2044,12 @@ function runCleanup(): void {
     const sizeAfter = getDatabaseSize();
     const savedKB = Math.round((sizeBefore - sizeAfter) / 1024);
 
-    console.log(
+    log.info(
       `[cleanup] Deleted ${logsDeleted} logs, ${runsDeleted} runs, ` +
       `${reviewsDeleted} reviews, ${notificationsDeleted} notifications. ` +
       `DB size: ${Math.round(sizeAfter / 1024)}KB (freed ${savedKB}KB)`
     );
   } catch (err) {
-    console.error('[cleanup] Error during cleanup:', err);
+    log.error('[cleanup] Error during cleanup:', err);
   }
 }

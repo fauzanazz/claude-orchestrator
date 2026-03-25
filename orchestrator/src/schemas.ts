@@ -23,7 +23,7 @@ export const LinearIssueDetailSchema = z.object({
 // GitHub CLI output schemas (gh)
 // ---------------------------------------------------------------------------
 
-export const GHPRListItemSchema = z.object({
+const GHPRListItemSchema = z.object({
   number: z.number(),
 });
 
@@ -76,3 +76,7 @@ export const GHRunListSchema = z.array(z.object({
   databaseId: z.number(),
   name: z.string(),
 }));
+
+// Derived types for external consumers
+export type GHPRListItem = z.infer<typeof GHPRListSchema>[number];
+export type GHPRView = z.infer<typeof GHPRViewSchema>;

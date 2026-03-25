@@ -1,5 +1,6 @@
 import { $ } from 'bun';
 import { join } from 'node:path';
+import { log } from './logger.ts';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { GoogleGenAI } from '@google/genai';
 import { config } from './config.ts';
@@ -178,11 +179,11 @@ async function saveToObsidian(run: Run, issue: Issue, summary: GeminiSessionSumm
   }
 
   await $`${args}`.quiet();
-  console.log(`[memory] Saved session summary for ${issue.key} (run ${run.id})`);
+  log.info(`[memory] Saved session summary for ${issue.key} (run ${run.id})`);
 
   // Generate project docs from codebase
   await $`obsidian-memory document`.quiet();
-  console.log(`[memory] Generated project documentation for ${issue.key}`);
+  log.info(`[memory] Generated project documentation for ${issue.key}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +212,9 @@ function resolveDocsConfig(worktreePath: string): ProjectDocsConfig | null {
             return { vaultPath, project: raw.project };
           }
         }
-      } catch {}
+      } catch (err) {
+        log.warn(`[memory] Failed to parse ${configPath}: ${err instanceof Error ? err.message : err}`);
+      }
     }
   }
   return null;
@@ -239,7 +242,7 @@ function parseGeminiJson(raw: string): unknown {
   } catch (e) {
     // Log truncated response for debugging
     const preview = text.length > 500 ? text.slice(0, 250) + '\n...\n' + text.slice(-250) : text;
-    console.error(`[memory] Gemini returned invalid JSON (${text.length} chars). Preview:\n${preview}`);
+    log.error(`[memory] Gemini returned invalid JSON (${text.length} chars). Preview:\n${preview}`);
     throw e;
   }
 }
@@ -366,19 +369,19 @@ async function updateProjectDocs(
 ): Promise<void> {
   const docsConfig = resolveDocsConfig(worktreePath);
   if (!docsConfig) {
-    console.log(`[memory] Skipping docs update — no .obsidian-memory.json found`);
+    log.info(`[memory] Skipping docs update — no .obsidian-memory.json found`);
     return;
   }
 
   const docsDir = join(docsConfig.vaultPath, 'Memory', 'Projects', docsConfig.project, 'Docs');
   if (!existsSync(docsDir)) {
-    console.log(`[memory] Skipping docs update — docs dir not found: ${docsDir}`);
+    log.info(`[memory] Skipping docs update — docs dir not found: ${docsDir}`);
     return;
   }
 
   const existingDocs = readExistingDocs(docsDir);
   if (Object.keys(existingDocs).length === 0) {
-    console.log(`[memory] Skipping docs update — no existing doc files found`);
+    log.info(`[memory] Skipping docs update — no existing doc files found`);
     return;
   }
 
@@ -393,7 +396,7 @@ async function updateProjectDocs(
   }
 
   if (updated > 0) {
-    console.log(`[memory] Updated ${updated} doc(s) for ${issue.key}`);
+    log.info(`[memory] Updated ${updated} doc(s) for ${issue.key}`);
   }
 }
 
@@ -496,7 +499,7 @@ export function sectionsContain(sections: string[], newContent: string): boolean
 
 export async function documentRun(run: Run, issue: Issue, worktreePath: string): Promise<void> {
   if (!config.geminiApiKey) {
-    console.log(`[memory] Skipping documentation — GEMINI_API_KEY not set`);
+    log.info(`[memory] Skipping documentation — GEMINI_API_KEY not set`);
     return;
   }
 
@@ -504,7 +507,7 @@ export async function documentRun(run: Run, issue: Issue, worktreePath: string):
   try {
     await $`which obsidian-memory`.quiet();
   } catch {
-    console.log(`[memory] Skipping documentation — obsidian-memory CLI not found`);
+    log.info(`[memory] Skipping documentation — obsidian-memory CLI not found`);
     return;
   }
 
@@ -519,6 +522,6 @@ export async function documentRun(run: Run, issue: Issue, worktreePath: string):
   try {
     await updateProjectDocs(run, issue, context, worktreePath);
   } catch (err) {
-    console.error(`[memory] Failed to update project docs for ${issue.key}:`, err);
+    log.error(`[memory] Failed to update project docs for ${issue.key}:`, err);
   }
 }

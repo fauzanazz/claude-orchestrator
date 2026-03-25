@@ -1,17 +1,11 @@
 import { config } from './config.ts';
 import { isPRNotified, markPRNotified, clearPRNotified } from './db.ts';
-import { loadProjects } from './runner.ts';
-import { GHPRListSchema, GHPRViewSchema } from './schemas.ts';
+import { log } from './logger.ts';
+import { loadProjects } from './config.ts';
+import { GHPRListSchema, GHPRViewSchema, type GHPRListItem, type GHPRView } from './schemas.ts';
 import type { PRMergeStatus } from './types.ts';
 
-// ---------------------------------------------------------------------------
-// GitHub PR status checking
-// ---------------------------------------------------------------------------
-
-import type { z } from 'zod';
-
-type GHPRListItem = z.infer<typeof GHPRListSchema>[number];
-export type GHPRView = z.infer<typeof GHPRViewSchema>;
+export type { GHPRView };
 
 async function ghPRList(repo: string): Promise<GHPRListItem[]> {
   const proc = Bun.spawn(
@@ -28,7 +22,7 @@ async function ghPRList(repo: string): Promise<GHPRListItem[]> {
   try {
     const parseResult = GHPRListSchema.safeParse(JSON.parse(out));
     if (!parseResult.success) {
-      console.warn(`[notify] gh pr list validation failed for ${repo}: ${parseResult.error.message}`);
+      log.warn(`[notify] gh pr list validation failed for ${repo}: ${parseResult.error.message}`);
       return [];
     }
     return parseResult.data;
@@ -56,7 +50,7 @@ async function ghPRView(repo: string, prNumber: number): Promise<GHPRView | null
   try {
     const parseResult = GHPRViewSchema.safeParse(JSON.parse(out));
     if (!parseResult.success) {
-      console.warn(`[notify] gh pr view validation failed for ${repo}#${prNumber}: ${parseResult.error.message}`);
+      log.warn(`[notify] gh pr view validation failed for ${repo}#${prNumber}: ${parseResult.error.message}`);
       return null;
     }
     return parseResult.data;
@@ -224,18 +218,21 @@ export async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    console.error('[notify] Slack webhook failed:', err);
+    log.error('[notify] Slack webhook failed:', err);
   }
 }
 
-export async function sendFixExhaustedNotification(
-  repo: string,
-  prNumber: number,
-  title: string,
-  url: string,
-  fixType: string,
-  attempts: number,
-): Promise<void> {
+export interface FixExhaustedOpts {
+  repo: string;
+  prNumber: number;
+  title: string;
+  url: string;
+  fixType: string;
+  attempts: number;
+}
+
+export async function sendFixExhaustedNotification(opts: FixExhaustedOpts): Promise<void> {
+  const { repo, prNumber, title, url, fixType, attempts } = opts;
   const typeLabel = fixType === 'merge_conflict' ? 'Merge Conflict' : 'CI Failure';
 
   sendMacOSNotification(
@@ -285,7 +282,7 @@ export async function sendFixExhaustedNotification(
       body: JSON.stringify(payload),
     });
   } catch (err) {
-    console.error('[notify] Slack fix-exhausted webhook failed:', err);
+    log.error('[notify] Slack fix-exhausted webhook failed:', err);
   }
 }
 
@@ -357,7 +354,7 @@ export async function fetchAllPRStatuses(): Promise<Map<string, GHPRView[]>> {
 
   repoResults.forEach((settled, i) => {
     if (settled.status === 'rejected') {
-      console.error(`[notify] Error fetching PRs for ${uniqueRepos[i] ?? 'unknown'}:`, settled.reason);
+      log.error(`[notify] Error fetching PRs for ${uniqueRepos[i] ?? 'unknown'}:`, settled.reason);
       return;
     }
     const { repo, prViews } = settled.value;
@@ -403,7 +400,7 @@ export async function pollMergeReadiness(prStatuses?: Map<string, GHPRView[]>): 
       const alreadyNotified = isPRNotified(repo, prData.number);
 
       if (status.isReady && !alreadyNotified) {
-        console.log(`[notify] PR #${prData.number} in ${repo} is merge-ready`);
+        log.info(`[notify] PR #${prData.number} in ${repo} is merge-ready`);
 
         sendMacOSNotification(
           'PR Ready to Merge',
@@ -415,7 +412,7 @@ export async function pollMergeReadiness(prStatuses?: Map<string, GHPRView[]>): 
         markPRNotified(repo, prData.number);
 
       } else if (!status.isReady && alreadyNotified) {
-        console.log(`[notify] PR #${prData.number} in ${repo} is no longer merge-ready, clearing notification state`);
+        log.info(`[notify] PR #${prData.number} in ${repo} is no longer merge-ready, clearing notification state`);
         clearPRNotified(repo, prData.number);
       }
     }

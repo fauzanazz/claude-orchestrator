@@ -1,3 +1,4 @@
+import { log } from './logger.ts';
 import { config } from './config.ts';
 
 let tunnelProc: import('bun').Subprocess | null = null;
@@ -6,19 +7,19 @@ export async function startTunnel(port: number): Promise<void> {
   const tunnelName = config.tunnelName;
 
   if (!tunnelName) {
-    console.log('[tunnel] TUNNEL_NAME not configured — tunnel disabled');
+    log.info('[tunnel] TUNNEL_NAME not configured — tunnel disabled');
     return;
   }
 
   const which = Bun.spawnSync(['which', 'cloudflared']);
   if (which.exitCode !== 0) {
-    console.warn(
+    log.warn(
       '[tunnel] cloudflared not found — install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/'
     );
     return;
   }
 
-  console.log(`[tunnel] Starting cloudflared tunnel "${tunnelName}" → http://localhost:${port}`);
+  log.info(`[tunnel] Starting cloudflared tunnel "${tunnelName}" → http://localhost:${port}`);
 
   tunnelProc = Bun.spawn(
     ['cloudflared', 'tunnel', '--no-autoupdate', '--url', `http://localhost:${port}`, 'run', tunnelName],
@@ -45,7 +46,7 @@ export async function startTunnel(port: number): Promise<void> {
 
         if (line.includes('Registered tunnel connection')) {
           const hostname = config.tunnelHostname ?? tunnelName;
-          console.log(`[tunnel] Connected — reachable at https://${hostname}`);
+          log.info(`[tunnel] Connected — reachable at https://${hostname}`);
         }
       }
     } catch {
@@ -58,7 +59,7 @@ export function stopTunnel(): void {
   if (tunnelProc) {
     tunnelProc.kill();
     tunnelProc = null;
-    console.log('[tunnel] Stopped cloudflared tunnel');
+    log.info('[tunnel] Stopped cloudflared tunnel');
   }
 }
 

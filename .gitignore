@@ -33,3 +33,7 @@ build/
 
 # Agent orchestrator state (auto-generated)
 .agent-state/
+
+# Desloppify local state
+.desloppify/
+/.claude/skills

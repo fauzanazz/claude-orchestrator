@@ -22,7 +22,6 @@ afterEach(async () => {
 describe('setupAgentState', () => {
   test('creates .agent-state directory', async () => {
     await setupAgentState(tmpDir);
-    const exists = await Bun.file(join(tmpDir, '.agent-state')).exists();
     // Directory existence check — mkdir would have created it
     const proc = Bun.spawn(['test', '-d', join(tmpDir, '.agent-state')]);
     await proc.exited;

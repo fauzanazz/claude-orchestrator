@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
+import { log } from './logger.ts';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import { ulid } from 'ulid';
 import type { SSEEvent, RunStatus } from './types.ts';
 import { config } from './config.ts';
 import {
@@ -15,14 +15,15 @@ import {
 import {
   onSSE,
   startRunner,
+  createRunRecord,
   enqueueRevision,
   enqueueWithIssue,
   reconstructIssueFromRun,
-  loadProjects,
   beginShutdown,
   getRunningCount,
   flushAllLogs,
 } from './runner.ts';
+import { loadProjects } from './config.ts';
 import { startTunnel, stopTunnel } from './tunnel.ts';
 
 // ---------------------------------------------------------------------------
@@ -107,12 +108,12 @@ if (!apiToken) {
   const tokenPath = join(import.meta.dir, '..', '.api-token');
   try {
     writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
-    console.log(`[server] Generated ephemeral API token → ${tokenPath}`);
+    log.info(`[server] Generated ephemeral API token → ${tokenPath}`);
   } catch (err) {
-    console.warn(`[server] Could not write API token to ${tokenPath}: ${err}`);
-    console.log(`[server] Ephemeral API token: ${apiToken}`);
+    log.warn(`[server] Could not write API token to ${tokenPath}: ${err}`);
+    log.info(`[server] Ephemeral API token: ${apiToken}`);
   }
-  console.log(`[server] Set API_TOKEN env var to persist across restarts`);
+  log.info(`[server] Set API_TOKEN env var to persist across restarts`);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,45 +290,32 @@ app.post('/api/runs/:id/retry', async (c) => {
     return c.json({ error: sanitizeErrorMessage(msg) }, 500);
   }
 
-  const newId = ulid();
-  const newRun = {
-    id: newId,
+  const newRun = createRunRecord({
     project: original.project,
     issue_id: original.issue_id,
     issue_key: original.issue_key,
     issue_title: original.issue_title,
     branch: original.branch,
     worktree_path: original.worktree_path,
-    status: 'queued' as RunStatus,
     is_revision: original.is_revision,
     is_fix: original.is_fix ?? 0,
     fix_type: original.fix_type ?? null,
     fix_attempt: original.fix_attempt ?? 0,
-    retry_attempt: 0,
     pr_number: original.pr_number,
-    agent_pid: null,
-    iterations: 0,
-    error_summary: null,
-    pr_url: null,
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_read_tokens: 0,
-    cache_creation_tokens: 0,
-    cost_usd: 0,
     design_path: original.design_path ?? null,
     issue_repo: original.issue_repo ?? null,
     base_branch: original.base_branch ?? null,
-  };
+  });
 
   insertRun(newRun);
 
-  const fullRun = getRun(newId);
+  const fullRun = getRun(newRun.id);
   if (fullRun) {
     enqueueWithIssue(fullRun, issue);
     broadcastSSE({ type: 'run_update', run: fullRun });
   }
 
-  return c.json({ id: newId });
+  return c.json({ id: newRun.id });
 });
 
 function parseDays(raw: string | undefined): number {
@@ -504,23 +492,23 @@ export function startServer(): void {
     fetch: app.fetch.bind(app),
   });
 
-  console.log(`[server] Listening on http://localhost:${config.port}`);
+  log.info(`[server] Listening on http://localhost:${config.port}`);
 
   // Graceful shutdown
   const shutdown = async () => {
-    console.log('[server] Shutting down gracefully...');
+    log.info('[server] Shutting down gracefully...');
     beginShutdown();
 
     // Wait for running agents (max 60 seconds)
     const maxWait = 60_000;
     const start = Date.now();
     while (getRunningCount() > 0 && Date.now() - start < maxWait) {
-      console.log(`[server] Waiting for ${getRunningCount()} running agent(s)...`);
+      log.info(`[server] Waiting for ${getRunningCount()} running agent(s)...`);
       await new Promise(r => setTimeout(r, 2000));
     }
 
     if (getRunningCount() > 0) {
-      console.log(`[server] ${getRunningCount()} agent(s) still running after timeout — forcing exit`);
+      log.info(`[server] ${getRunningCount()} agent(s) still running after timeout — forcing exit`);
     }
 
     // Flush remaining logs
@@ -535,7 +523,7 @@ export function startServer(): void {
     // Close database
     db.close();
 
-    console.log('[server] Shutdown complete');
+    log.info('[server] Shutdown complete');
     process.exit(0);
   };
 

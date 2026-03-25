@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { validateInitCommand, splitCommand } from './validate.ts';
 
-export async function detectInit(worktreePath: string): Promise<string[]> {
+async function detectInit(worktreePath: string): Promise<string[]> {
   if (await Bun.file(join(worktreePath, 'bun.lockb')).exists()) {
     return ['bun install'];
   }
