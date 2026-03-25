@@ -6,6 +6,7 @@ import { config, loadProjects, resolveProject } from './config.ts';
 import { documentRun, readProjectMemory } from './memory.ts';
 import { TokenTracker } from './token-tracker.ts';
 import { reviewRun, formatReviewFeedback } from './review-gate.ts';
+import { updateProjectIntelligence, buildIntelligenceSection } from './project-intelligence.ts';
 import {
   insertRun,
   insertLog,
@@ -586,6 +587,12 @@ export async function buildAgentPrompt(
     } catch (err) {
       log.warn(`[runner] Memory injection failed for ${projectKey}: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  // 2.8. Project intelligence (injected on first session only)
+  if (isFirstSession && projectKey) {
+    const intelligence = buildIntelligenceSection(projectKey);
+    if (intelligence) sections.push(intelligence);
   }
 
   // 3. Design doc — full on first session, reference on continuations
@@ -1296,6 +1303,11 @@ export async function executeRun(
       );
     }
 
+    // Update project intelligence (fire-and-forget)
+    updateProjectIntelligence(projectKey).catch((e) =>
+      console.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+    );
+
   } catch (err) {
     // Record token usage even on failure
     const failCost = tokenTracker.estimateCost();
@@ -1349,6 +1361,11 @@ export async function executeRun(
         log.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
       );
     }
+
+    // Update intelligence even for failed runs (failure patterns are valuable)
+    updateProjectIntelligence(projectKey).catch((e) =>
+      console.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+    );
 
   } finally {
     flushLogs(runId);
