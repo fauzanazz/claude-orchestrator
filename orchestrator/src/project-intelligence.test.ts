@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll, beforeEach } from 'bun:test';
 import { db, insertRun, updateRunStatus } from './db.ts';
 import { updateProjectIntelligence, buildIntelligenceSection } from './project-intelligence.ts';
+import type { RunStatus } from './types.ts';
 
 // Safety: abort if tests are running against the production database
 beforeAll(() => {
@@ -43,10 +44,15 @@ function makeRun(id: string, project: string, overrides?: Partial<{
     design_path: null,
     issue_repo: null,
     base_branch: null,
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    cost_usd: 0,
   });
 
-  const status = overrides?.status ?? 'success';
-  updateRunStatus(id, status as any, {
+  const status = (overrides?.status ?? 'success') as RunStatus;
+  updateRunStatus(id, status, {
     started_at: overrides?.started_at ?? new Date(Date.now() - 600_000).toISOString(),
     completed_at: overrides?.completed_at ?? new Date().toISOString(),
     error_summary: overrides?.error_summary ?? undefined,

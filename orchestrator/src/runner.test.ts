@@ -1,15 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { mkdir, rm } from 'node:fs/promises';
-import {
-  buildSpawnArgs,
-  parseReviewFeedback,
-  readAgentSignal,
-  parseIssueMetadata,
-  buildRetryContext,
-  logBuffers,
-  chunkArray,
-} from './runner.ts';
+import { buildSpawnArgs, readAgentSignal, chunkArray } from './runner.ts';
+import { parseIssueMetadata } from './poller.ts';
+import { parseReviewFeedback } from './agent-prompts.ts';
+import { buildRetryContext, logBuffers } from './queue.ts';
 import type { Run } from './types.ts';
 
 // ---------------------------------------------------------------------------

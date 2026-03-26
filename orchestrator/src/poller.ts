@@ -5,7 +5,7 @@ import { resolveProject } from './config.ts';
 import { hasAnyRunForIssue } from './db.ts';
 import { validateDesignPath, validateBranch, validateRepo } from './validate.ts';
 import { LinearIssueListSchema, LinearIssueDetailSchema } from './schemas.ts';
-import { chunkArray } from './runner.ts';
+import { chunkArray } from './utils.ts';
 import type {
   Run,
   Issue,

@@ -96,13 +96,8 @@ export { createRunRecord, onSSE, logBuffers, beginShutdown, getRunningCount, flu
 
 const ulid = monotonicFactory();
 
-export function chunkArray<T>(arr: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
+// Re-exported from utils.ts to avoid breaking existing imports (e.g. tests)
+export { chunkArray } from './utils.ts';
 
 class NonRetryableError extends Error {
   constructor(message: string) {
