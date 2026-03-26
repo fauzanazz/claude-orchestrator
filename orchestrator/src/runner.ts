@@ -1367,7 +1367,7 @@ async function executeRun(
 
     // Update project intelligence (fire-and-forget)
     updateProjectIntelligence(projectKey).catch((e) =>
-      console.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+      log.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
     );
 
   } catch (err) {
@@ -1426,7 +1426,7 @@ async function executeRun(
 
     // Update intelligence even for failed runs (failure patterns are valuable)
     updateProjectIntelligence(projectKey).catch((e) =>
-      console.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+      log.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
     );
 
   } finally {

@@ -212,13 +212,16 @@ async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
   };
 
   try {
-    await fetch(config.slackWebhookUrl, {
+    const resp = await fetch(config.slackWebhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!resp.ok) {
+      log.warn(`[notify] Slack webhook returned ${resp.status}: ${await resp.text().catch(() => '(no body)')}`);
+    }
   } catch (err) {
-    log.error('[notify] Slack webhook failed:', err);
+    log.warn(`[notify] Slack webhook failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -276,13 +279,16 @@ export async function sendFixExhaustedNotification(opts: FixExhaustedOpts): Prom
   };
 
   try {
-    await fetch(config.slackWebhookUrl, {
+    const resp = await fetch(config.slackWebhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!resp.ok) {
+      log.warn(`[notify] Slack fix-exhausted webhook returned ${resp.status}: ${await resp.text().catch(() => '(no body)')}`);
+    }
   } catch (err) {
-    log.error('[notify] Slack fix-exhausted webhook failed:', err);
+    log.warn(`[notify] Slack fix-exhausted webhook failed: ${err instanceof Error ? err.message : err}`);
   }
 }
 

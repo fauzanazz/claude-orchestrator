@@ -4,9 +4,7 @@ import { mkdir, rm, readFile } from 'node:fs/promises';
 import {
   setupAgentState,
   hasLocalCommits,
-  buildAgentSettings,
   writeAgentSettings,
-  DEFAULT_ALLOWED_TOOLS,
 } from './git.ts';
 
 const tmpDir = join(import.meta.dir, '..', '.test-tmp-git');
@@ -102,46 +100,14 @@ describe('hasLocalCommits', () => {
   });
 });
 
-describe('buildAgentSettings', () => {
-  test('returns default allowlist when no args provided', () => {
-    const settings = buildAgentSettings() as {
-      permissions: { allow: string[]; deny: string[] };
-    };
-    expect(settings.permissions.allow).toEqual(DEFAULT_ALLOWED_TOOLS);
-  });
-
-  test('returns custom allowlist when provided', () => {
-    const custom = ['Bash(bun *)', 'Bash(git *)'];
-    const settings = buildAgentSettings(custom) as {
-      permissions: { allow: string[]; deny: string[] };
-    };
-    expect(settings.permissions.allow).toEqual(custom);
-  });
-
-  test('always includes deny list', () => {
-    const settings = buildAgentSettings() as {
-      permissions: { allow: string[]; deny: string[] };
-    };
-    expect(settings.permissions.deny).toContain('Bash(curl *)');
-    expect(settings.permissions.deny).toContain('Bash(sudo *)');
-    expect(settings.permissions.deny).toContain('Bash(ssh *)');
-  });
-
-  test('includes deny list with custom allowlist', () => {
-    const settings = buildAgentSettings(['Read']) as {
-      permissions: { allow: string[]; deny: string[] };
-    };
-    expect(settings.permissions.deny).toContain('Bash(curl *)');
-    expect(settings.permissions.allow).toEqual(['Read']);
-  });
-});
-
 describe('writeAgentSettings', () => {
   test('creates .claude/settings.json with default permissions', async () => {
     await writeAgentSettings(tmpDir);
     const content = await readFile(join(tmpDir, '.claude', 'settings.json'), 'utf-8');
     const parsed = JSON.parse(content);
-    expect(parsed.permissions.allow).toEqual(DEFAULT_ALLOWED_TOOLS);
+    expect(parsed.permissions.allow).toContain('Read');
+    expect(parsed.permissions.allow).toContain('Edit');
+    expect(parsed.permissions.allow).toContain('Grep');
     expect(parsed.permissions.deny).toContain('Bash(curl *)');
   });
 

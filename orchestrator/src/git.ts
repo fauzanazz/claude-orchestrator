@@ -327,7 +327,7 @@ export async function hasLocalCommits(worktreePath: string): Promise<boolean> {
 // Agent settings
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_ALLOWED_TOOLS = [
+const DEFAULT_ALLOWED_TOOLS = [
   'Read',
   'Glob',
   'Grep',
@@ -407,7 +407,7 @@ const DENIED_TOOLS = [
   'Bash(osascript *)',
 ];
 
-export function buildAgentSettings(allowedTools?: string[]): object {
+function buildAgentSettings(allowedTools?: string[]): object {
   const allow = [...(allowedTools ?? DEFAULT_ALLOWED_TOOLS)];
   return {
     permissions: {

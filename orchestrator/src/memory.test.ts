@@ -1,6 +1,8 @@
 import { describe, test, expect } from 'bun:test';
-import { scrubSensitiveData, scrubRunContext, truncateContext, parseDelimitedDocs, readProjectMemory, sectionsContain } from './memory.ts';
-import type { RunContext } from './memory.ts';
+import { truncateContext, readProjectMemory, _testing } from './memory.ts';
+import type { _RunContext as RunContext } from './memory.ts';
+
+const { scrubSensitiveData, scrubRunContext, parseDelimitedDocs, sectionsContain } = _testing;
 
 describe('scrubSensitiveData', () => {
   test('leaves normal code without secrets unchanged', () => {

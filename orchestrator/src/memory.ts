@@ -7,7 +7,7 @@ import { config } from './config.ts';
 import { getLogsForRun } from './db.ts';
 import type { Run, Issue } from './types.ts';
 
-export interface RunContext {
+interface RunContext {
   agentLogs: string;
   gitDiff: string;
   designDoc: string;
@@ -34,7 +34,7 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   { pattern: /^[A-Z_]{3,}=(?!.*(?:\/\/|REDACTED)).{8,}$/gm, replacement: '[ENV_VAR_REDACTED]' },
 ];
 
-export function scrubSensitiveData(text: string): string {
+function scrubSensitiveData(text: string): string {
   let result = text;
   for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
     pattern.lastIndex = 0;
@@ -43,7 +43,7 @@ export function scrubSensitiveData(text: string): string {
   return result;
 }
 
-export function scrubRunContext(context: RunContext): RunContext {
+function scrubRunContext(context: RunContext): RunContext {
   return {
     agentLogs: scrubSensitiveData(context.agentLogs),
     gitDiff: scrubSensitiveData(context.gitDiff),
@@ -247,7 +247,7 @@ function parseGeminiJson(raw: string): unknown {
   }
 }
 
-export function parseDelimitedDocs(raw: string): Record<string, string> {
+function parseDelimitedDocs(raw: string): Record<string, string> {
   const docs: Record<string, string> = {};
   // Strip markdown code fences (3+ backticks) Gemini sometimes wraps despite instructions
   let text = raw.trim();
@@ -488,7 +488,7 @@ export async function readProjectMemory(
 /**
  * Check if any existing section already contains the new content (dedup).
  */
-export function sectionsContain(sections: string[], newContent: string): boolean {
+function sectionsContain(sections: string[], newContent: string): boolean {
   const sample = newContent.slice(0, 200);
   return sections.some((s) => s.includes(sample));
 }
@@ -518,10 +518,19 @@ export async function documentRun(run: Run, issue: Issue, worktreePath: string):
   const summary = await callGemini(run, issue, context);
   await saveToObsidian(run, issue, summary);
 
-  // Update project feature docs with info from this run
+  // Update project feature docs with info from this run (non-fatal)
   try {
     await updateProjectDocs(run, issue, context, worktreePath);
   } catch (err) {
-    log.error(`[memory] Failed to update project docs for ${issue.key}:`, err);
+    log.warn(`[memory] Failed to update project docs for ${issue.key}: ${err instanceof Error ? err.message : err}`);
   }
 }
+
+/** @internal Exposed for unit tests only — not part of the public API. */
+export const _testing = {
+  scrubSensitiveData,
+  scrubRunContext,
+  parseDelimitedDocs,
+  sectionsContain,
+} as const;
+export type { RunContext as _RunContext };
