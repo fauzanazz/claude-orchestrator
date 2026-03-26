@@ -1,12 +1,18 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { log, errorMsg } from './logger.ts';
 import { monotonicFactory } from 'ulid';
 import { config, loadProjects, resolveProject } from './config.ts';
-import { documentRun, readProjectMemory } from './memory.ts';
+import { documentRun } from './memory.ts';
 import { TokenTracker } from './token-tracker.ts';
 import { reviewRun, formatReviewFeedback } from './review-gate.ts';
-import { updateProjectIntelligence, buildIntelligenceSection } from './project-intelligence.ts';
+import { updateProjectIntelligence } from './project-intelligence.ts';
+import {
+  parseReviewFeedback,
+  generateCodebaseSummary,
+  buildAgentPrompt,
+  buildPreviousSessionSummary,
+  buildFixPrompt,
+} from './agent-prompts.ts';
 import {
   insertRun,
   insertLog,
@@ -22,13 +28,9 @@ import {
   getWatchableRuns,
   getFixTracking,
   upsertFixTracking,
-  markFixExhausted,
   resolveFixTracking,
-  deleteFixTracking,
-  getRunByPRNumber,
   getIssueForRun,
   getPRNumberByIssueKey,
-  getSiblingOpenPRRuns,
   deleteOldLogs,
   deleteOldRuns,
   deleteOldProcessedReviews,
@@ -37,7 +39,6 @@ import {
   getDatabaseSize,
   snapshotDatabase,
   hasActiveRunForIssue,
-  hasAnyRunForIssue,
 } from './db.ts';
 import {
   ensureProjectLocal,
@@ -50,13 +51,12 @@ import {
   createPR,
   rebaseOnto,
   continueRebase,
-  abortRebase,
   forcePushFromWorktree,
   type RebaseResult,
 } from './git.ts';
 import { initWorktree } from './init.ts';
-import { validateDesignPath, validateBranch, validateRepo } from './validate.ts';
-import { LinearIssueListSchema, LinearIssueDetailSchema, GHPRReviewPollSchema, GHRunListSchema } from './schemas.ts';
+import { fetchCIFailureLogs, proactiveRebaseSiblings, pollFixable } from './fix-handler.ts';
+import { GHPRReviewPollSchema } from './schemas.ts';
 import {
   buildInitializerPrompt,
   buildCodingPrompt,
@@ -64,16 +64,26 @@ import {
   isAllFeaturesDone,
   type SessionPromptContext,
 } from './prompts.ts';
-import { pollMergeReadiness, fetchAllPRStatuses, checkFixNeeded, sendFixExhaustedNotification, type GHPRView } from './notify.ts';
+import { pollMergeReadiness, fetchAllPRStatuses } from './notify.ts';
+import {
+  pollLinear,
+  parseIssueMetadata,
+  reconstructIssueFromRun,
+  updateLinearStatus,
+  commentOnIssue,
+} from './poller.ts';
 import type {
   Run,
   Issue,
-  LinearIssue,
-  ParsedIssueMetadata,
   ProjectConfig,
   SSEEvent,
   FixType,
 } from './types.ts';
+
+// Re-export poller functions that were previously exported from runner.ts
+export { parseIssueMetadata, reconstructIssueFromRun };
+// Re-export prompt functions that were previously exported from runner.ts
+export { parseReviewFeedback };
 
 const ulid = monotonicFactory();
 
@@ -158,249 +168,6 @@ function flushLogs(runId: string): void {
   logBuffers.delete(runId);
 }
 
-// ---------------------------------------------------------------------------
-// Linear API rate limiter (shared across lineark CLI + direct GraphQL calls)
-// Linear allows 30 requests per 60s — we stay under with a 25-req budget.
-// ---------------------------------------------------------------------------
-
-const linearCallTimestamps: number[] = [];
-const LINEAR_RATE_LIMIT = 25;
-const LINEAR_RATE_WINDOW_MS = 60_000;
-
-async function waitForLinearRateLimit(): Promise<void> {
-  const now = Date.now();
-  // Evict timestamps outside the window
-  while (linearCallTimestamps.length > 0 && linearCallTimestamps[0]! < now - LINEAR_RATE_WINDOW_MS) {
-    linearCallTimestamps.shift();
-  }
-  if (linearCallTimestamps.length >= LINEAR_RATE_LIMIT) {
-    const waitMs = linearCallTimestamps[0]! + LINEAR_RATE_WINDOW_MS - now + 100;
-    log.debug(`[runner] Linear rate limit: waiting ${Math.round(waitMs / 1000)}s`);
-    await new Promise(resolve => setTimeout(resolve, waitMs));
-    return waitForLinearRateLimit();
-  }
-  linearCallTimestamps.push(Date.now());
-}
-
-// ---------------------------------------------------------------------------
-// Linear interaction
-// ---------------------------------------------------------------------------
-
-const LINEARK_MAX_RETRIES = 3;
-
-async function runLineark(args: string[]): Promise<string> {
-  for (let attempt = 0; attempt <= LINEARK_MAX_RETRIES; attempt++) {
-    await waitForLinearRateLimit();
-
-    const proc = Bun.spawn(['lineark', ...args], { stdout: 'pipe', stderr: 'pipe' });
-    const [rawOut, errText, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    if (exitCode === 0) return rawOut;
-
-    if ((errText.includes('RATELIMITED') || errText.includes('429')) && attempt < LINEARK_MAX_RETRIES) {
-      const jitter = Math.floor(Math.random() * 2000);
-      const backoffMs = 2000 * 2 ** attempt + jitter; // ~2-4s, ~4-6s, ~8-10s
-      log.warn(`[runner] lineark rate-limited, retry ${attempt + 1}/${LINEARK_MAX_RETRIES} in ${(backoffMs / 1000).toFixed(1)}s`);
-      await new Promise(resolve => setTimeout(resolve, backoffMs));
-      continue;
-    }
-
-    throw new Error(`lineark ${args[0]} failed (exit ${exitCode}): ${errText.trim()}`);
-  }
-  throw new Error(`lineark ${args[0]} failed after ${LINEARK_MAX_RETRIES} retries`);
-}
-
-// lineark doesn't include the parent field in `issues read` output, so we
-// query the Linear GraphQL API directly to resolve parent relationships.
-async function fetchLinearParent(issueId: string): Promise<{ id: string; identifier: string } | null> {
-  const tokenPath = join(process.env.HOME ?? '~', '.linear_api_token');
-  let token: string;
-  try {
-    token = readFileSync(tokenPath, 'utf-8').trim();
-  } catch {
-    log.debug(`[runner] Linear API token not found at ${tokenPath} — skipping parent lookup`);
-    return null;
-  }
-
-  try {
-    await waitForLinearRateLimit();
-    const resp = await fetch('https://api.linear.app/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: token },
-      body: JSON.stringify({
-        query: `query ($id: String!) { issue(id: $id) { parent { id identifier } } }`,
-        variables: { id: issueId },
-      }),
-    });
-    const json = await resp.json() as { data?: { issue?: { parent?: { id: string; identifier: string } | null } } };
-    return json.data?.issue?.parent ?? null;
-  } catch (err) {
-    log.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${errorMsg(err)}`);
-    return null;
-  }
-}
-
-async function pollLinear(): Promise<LinearIssue[]> {
-  // Step 1: List issues (lean output — has identifier + state but no id/description)
-  const listOut = await runLineark(['issues', 'list', '--format', 'json']);
-  let listJson: unknown;
-  try {
-    listJson = JSON.parse(listOut);
-  } catch {
-    throw new Error(`lineark list output is not valid JSON: ${listOut.slice(0, 200)}`);
-  }
-  const parseResult = LinearIssueListSchema.safeParse(listJson);
-  if (!parseResult.success) {
-    throw new Error(`lineark list output validation failed: ${parseResult.error.message}`);
-  }
-  const summaries = parseResult.data;
-
-  // Filter to actionable states: "Ready for Agent" (new work) or "In Progress" (orphaned after restart)
-  const ready = summaries.filter((s) => s.state === 'Ready for Agent' || s.state === 'In Progress');
-  if (ready.length === 0) return [];
-
-  clearParentStateCache();
-
-  // Step 2: Fetch full details concurrently (3 at a time to stay within rate limits)
-  const POLL_CONCURRENCY = 3;
-  const chunks = chunkArray(ready, POLL_CONCURRENCY);
-  const issues: LinearIssue[] = [];
-
-  for (const chunk of chunks) {
-    const results = await Promise.all(
-      chunk.map(async (summary): Promise<LinearIssue | null> => {
-        const identifier = summary.identifier;
-
-        let readOut: string;
-        try {
-          readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
-        } catch (err) {
-          log.warn(`[runner] lineark read failed for ${identifier}: ${errorMsg(err)}`);
-          return null;
-        }
-
-        let detailJson: unknown;
-        try {
-          detailJson = JSON.parse(readOut);
-        } catch {
-          log.warn(`[runner] lineark read for ${identifier} returned invalid JSON`);
-          return null;
-        }
-
-        const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
-        if (!detailResult.success) {
-          log.warn(`[runner] Failed to validate lineark read for ${identifier}: ${detailResult.error.message}`);
-          return null;
-        }
-        const full = detailResult.data;
-
-        if (!full.description.includes('design:') && !(full.description.includes('branch:') && full.description.includes('repo:'))) {
-          return null;
-        }
-
-        // "In Progress" issues are only re-picked if the orchestrator previously ran them
-        // (orphaned after crash). Issues manually moved to "In Progress" are skipped.
-        if (summary.state === 'In Progress' && !hasAnyRunForIssue(full.id)) {
-          log.info(`[runner] Skipping ${identifier} — "In Progress" but no prior run (manually moved?)`);
-          return null;
-        }
-
-        // lineark doesn't return parent — fetch from Linear API directly
-        const parent = await fetchLinearParent(full.id);
-        if (parent?.identifier) {
-          const done = await isParentDone(parent.identifier);
-          if (!done) {
-            log.info(`[runner] Skipping ${identifier}: parent ${parent.identifier} not done yet`);
-            return null;
-          }
-        }
-
-        return {
-          id: full.id,
-          identifier: full.identifier,
-          title: full.title,
-          description: full.description,
-          parent: parent ?? undefined,
-        };
-      })
-    );
-
-    for (const result of results) {
-      if (result) issues.push(result);
-    }
-  }
-
-  return issues;
-}
-
-export function parseIssueMetadata(description: string): ParsedIssueMetadata | null {
-  // Try structured format first (from submit.sh): "design: ...\nbranch: ...\nrepo: ..."
-  const designMatch = description.match(/^design:\s*(.+)$/im);
-  const branchMatch = description.match(/^branch:\s*(.+)$/im);
-  const repoMatch = description.match(/^repo:\s*(.+)$/im);
-
-  const designPath = designMatch?.[1]?.trim();
-  const branch = branchMatch?.[1]?.trim();
-  const repo = repoMatch?.[1]?.trim();
-
-  // Branch and repo are always required
-  if (branch && repo) {
-    try {
-      return {
-        designPath: designPath ? validateDesignPath(designPath) : null,
-        branch: validateBranch(branch),
-        repo: validateRepo(repo),
-      };
-    } catch (err) {
-      log.warn(`[runner] parseIssueMetadata: validation failed: ${errorMsg(err)}`);
-      return null;
-    }
-  }
-
-  // Fallback: extract from prose-style descriptions
-  const proseDesign = description.match(/design\s*doc:\s*([\w/._-]+\.md)/i);
-  const proseBranch = description.match(/branch\s+([\w/\-]+(?:\/[\w/\-]+)*)/i);
-  const proseRepo = description.match(/repo:\s*([\w/._-]+)/i)
-    ?? description.match(/repo[.:]?\s*([\w-]+\/[\w._-]+)/i);
-
-  const pd = proseDesign?.[1]?.trim();
-  const pb = proseBranch?.[1]?.trim();
-  const pr = proseRepo?.[1]?.trim();
-
-  if (!pb || !pr) return null;
-
-  try {
-    return {
-      designPath: pd ? validateDesignPath(pd) : null,
-      branch: validateBranch(pb),
-      repo: validateRepo(pr),
-    };
-  } catch (err) {
-    log.warn(`[runner] parseIssueMetadata: validation failed: ${errorMsg(err)}`);
-    return null;
-  }
-}
-
-function updateLinearStatus(key: string, state: string): void {
-  // Fire and forget — but record the call in the rate limiter
-  linearCallTimestamps.push(Date.now());
-  Bun.spawn(['lineark', 'issues', 'update', key, '-s', state], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-}
-
-function commentOnIssue(key: string, message: string): void {
-  // Fire and forget — but record the call in the rate limiter
-  linearCallTimestamps.push(Date.now());
-  Bun.spawn(['lineark', 'comments', 'create', key, '--body', message], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-}
 
 function commentOnPR(repo: string, prNumber: number, body: string): void {
   Bun.spawn(['gh', 'pr', 'comment', String(prNumber), '--repo', repo, '--body', body], {
@@ -421,264 +188,11 @@ function getAgentConclusion(runId: string): string | null {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Parent dependency checking
-// ---------------------------------------------------------------------------
-
-const parentStateCache = new Map<string, string>();
-
-function clearParentStateCache(): void {
-  parentStateCache.clear();
-}
-
-async function getIssueState(identifier: string): Promise<string | null> {
-  const cached = parentStateCache.get(identifier);
-  if (cached) return cached;
-
-  try {
-    const readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
-    const parsed = JSON.parse(readOut) as Record<string, unknown>;
-    const state = (parsed.state as Record<string, unknown>)?.name as string | undefined;
-    if (state) {
-      parentStateCache.set(identifier, state);
-    }
-    return state ?? null;
-  } catch {
-    log.warn(`[runner] Failed to read state for ${identifier}`);
-    return null;
-  }
-}
-
-async function isParentDone(parentIdentifier: string): Promise<boolean> {
-  const state = await getIssueState(parentIdentifier);
-  if (!state) return false; // can't determine — safe to block
-
-  const doneStates = ['done', 'canceled', 'cancelled'];
-  return doneStates.includes(state.toLowerCase());
-}
-
 // loadProjects and resolveProject live in config.ts
 
 // ---------------------------------------------------------------------------
-// Issue reconstruction (from DB run record via Linear)
+// Prompt building (extracted to agent-prompts.ts)
 // ---------------------------------------------------------------------------
-
-export async function reconstructIssueFromRun(run: Run): Promise<Issue> {
-  const readOut = await runLineark(['issues', 'read', run.issue_key, '--format', 'json']);
-
-  let detailJson: unknown;
-  try {
-    detailJson = JSON.parse(readOut);
-  } catch {
-    throw new Error(`lineark read for ${run.issue_key} returned invalid JSON`);
-  }
-  const detailResult = LinearIssueDetailSchema.safeParse(detailJson);
-  if (!detailResult.success) {
-    throw new Error(`Failed to validate Linear issue for ${run.issue_key}: ${detailResult.error.message}`);
-  }
-  const linearIssue = detailResult.data;
-
-  const meta = parseIssueMetadata(linearIssue.description);
-  if (!meta) {
-    throw new Error(`Could not parse issue metadata from ${run.issue_key} description`);
-  }
-
-  const resolved = resolveProject(meta.repo);
-  if (!resolved) {
-    throw new Error(`Project not found for repo: ${meta.repo}`);
-  }
-
-  const parent = await fetchLinearParent(linearIssue.id);
-
-  return {
-    id: linearIssue.id,
-    key: run.issue_key,
-    title: run.issue_title,
-    description: linearIssue.description,
-    designPath: meta.designPath,
-    branch: meta.branch,
-    repo: meta.repo,
-    baseBranch: resolved.project.baseBranch,
-    parentKey: parent?.identifier ?? null,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Prompt building
-// ---------------------------------------------------------------------------
-
-export function parseReviewFeedback(rawJson: string): string | undefined {
-  let parsed: { reviews?: unknown[]; comments?: unknown[] };
-  try {
-    parsed = JSON.parse(rawJson);
-  } catch {
-    return undefined;
-  }
-
-  const sections: string[] = [];
-
-  if (Array.isArray(parsed.reviews)) {
-    for (const review of parsed.reviews) {
-      const r = review as Record<string, unknown>;
-      const author = (r.author as Record<string, unknown>)?.login as string ?? 'unknown';
-      const state = (r.state as string ?? '').toLowerCase();
-      const body = (r.body as string ?? '').trim();
-      if (!body && state === 'approved') continue;
-      if (!body && state === 'commented') continue;
-      sections.push(`### ${author} (${state})\n\n${body || '_No comment body_'}`);
-    }
-  }
-
-  if (Array.isArray(parsed.comments)) {
-    for (const comment of parsed.comments) {
-      const c = comment as Record<string, unknown>;
-      const author = (c.author as Record<string, unknown>)?.login as string ?? 'unknown';
-      const body = (c.body as string ?? '').trim();
-      if (!body) continue;
-      sections.push(`### ${author} (comment)\n\n${body}`);
-    }
-  }
-
-  if (sections.length === 0) return undefined;
-  return sections.join('\n\n---\n\n');
-}
-
-async function generateCodebaseSummary(worktreePath: string): Promise<string> {
-  const treeProc = Bun.spawn(
-    ['tree', '-L', '2', '--gitignore', '-I', 'node_modules|.git|.worktrees'],
-    { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
-  );
-  const [treeOut, treeExit] = await Promise.all([
-    new Response(treeProc.stdout).text(),
-    treeProc.exited,
-  ]);
-
-  if (treeExit === 0 && treeOut.trim()) {
-    const output = treeOut.trim();
-    const truncated = output.length > 5000 ? output.slice(0, 5000) + '\n... (truncated)' : output;
-    return `## Codebase Structure\n\n\`\`\`\n${truncated}\n\`\`\``;
-  }
-
-  const findProc = Bun.spawn(
-    ['find', '.', '-maxdepth', '2', '-not', '-path', '*/node_modules/*', '-not', '-path', '*/.git/*', '-not', '-path', '*/.worktrees/*'],
-    { cwd: worktreePath, stdout: 'pipe', stderr: 'pipe' },
-  );
-  const [findOut] = await Promise.all([
-    new Response(findProc.stdout).text(),
-    findProc.exited,
-  ]);
-
-  const files = findOut.trim().split('\n').sort((a, b) => a.localeCompare(b)).join('\n');
-  return `## Codebase Structure\n\n\`\`\`\n${files}\n\`\`\``;
-}
-
-async function fileExistsAndRead(filePath: string): Promise<string | null> {
-  const file = Bun.file(filePath);
-  if (!(await file.exists())) return null;
-  return file.text();
-}
-
-function buildRulesSection(issue: Issue, isRevision: boolean): string {
-  const lines: string[] = [
-    '## Agent Rules',
-    '',
-    `- **Branch**: \`${issue.branch}\``,
-    `- **Issue**: ${issue.key} — ${issue.title}`,
-    `- All commits must reference the issue key in the message, e.g. \`[${issue.key}] feat: description\`.`,
-    '- Only modify files relevant to the scope described in the design document.',
-    '- Do not modify unrelated files, configuration, or documentation outside the design scope.',
-    '- Do not push — the orchestrator handles git push.',
-    '- Stage and commit your changes using `git add` and `git commit`.',
-  ];
-
-  if (isRevision) {
-    lines.push('- This is a **revision run**. Address the review feedback below before making new commits.');
-  }
-
-  return lines.join('\n');
-}
-
-async function buildAgentPrompt(
-  issue: Issue,
-  worktreePath: string,
-  opts?: {
-    reviewFeedback?: string;
-    isFirstSession?: boolean;
-    codebaseSummary?: string;
-    projectKey?: string;
-  },
-): Promise<string> {
-  const { reviewFeedback, isFirstSession = true, codebaseSummary, projectKey } = opts ?? {};
-  const sections: string[] = [];
-
-  // 1. Global prompt
-  const globalPrompt = await fileExistsAndRead(config.globalPromptPath);
-  if (globalPrompt) sections.push(globalPrompt.trim());
-
-  // 2. CLAUDE.md from worktree (project-level instructions)
-  const claudeMd = await fileExistsAndRead(join(worktreePath, 'CLAUDE.md'));
-  if (claudeMd) sections.push(claudeMd.trim());
-
-  // 2.5. Codebase summary (if provided)
-  if (codebaseSummary) sections.push(codebaseSummary);
-
-  // 2.7. Project memory — inject on first session only
-  if (isFirstSession && projectKey) {
-    try {
-      const memory = await readProjectMemory(projectKey, {
-        issueTitle: issue.title,
-        issueKey: issue.key,
-      });
-      if (memory) sections.push(memory);
-    } catch (err) {
-      log.warn(`[runner] Memory injection failed for ${projectKey}: ${errorMsg(err)}`);
-    }
-  }
-
-  // 2.8. Project intelligence (injected on first session only)
-  if (isFirstSession && projectKey) {
-    const intelligence = buildIntelligenceSection(projectKey);
-    if (intelligence) sections.push(intelligence);
-  }
-
-  // 3. Design doc — full on first session, reference on continuations
-  if (issue.designPath) {
-    const designDocPath = join(worktreePath, issue.designPath);
-    if (isFirstSession) {
-      const designDoc = await fileExistsAndRead(designDocPath);
-      if (designDoc) sections.push(designDoc.trim());
-    } else {
-      const featuresExist = await Bun.file(join(worktreePath, '.agent-state', 'features.json')).exists();
-      if (featuresExist) {
-        sections.push(`## Design Document\n\nFull design at \`${issue.designPath}\`. Features extracted to \`.agent-state/features.json\`. Read the design doc only if you need to review the original requirements.`);
-      } else {
-        const designDoc = await fileExistsAndRead(designDocPath);
-        if (designDoc) sections.push(designDoc.trim());
-      }
-    }
-  } else {
-    // Designless task: use issue description as the spec
-    sections.push(`## Task Specification\n\n${issue.description}`);
-  }
-
-  // 4. Issue context
-  const contextLines: string[] = [
-    `## Task`,
-    '',
-    `**Issue**: ${issue.key} — ${issue.title}`,
-  ];
-
-  if (reviewFeedback) {
-    contextLines.push('', '## Review Feedback', '', reviewFeedback.trim());
-  }
-
-  sections.push(contextLines.join('\n'));
-
-  // 5. Rules
-  sections.push(buildRulesSection(issue, !!reviewFeedback));
-
-  return sections.join('\n\n---\n\n');
-}
 
 export interface AgentSignal {
   status: 'blocked' | 'needs_clarification' | 'impossible';
@@ -711,33 +225,6 @@ async function clearAgentSignal(worktreePath: string): Promise<void> {
     const { unlink } = await import('node:fs/promises');
     await unlink(signalPath);
   } catch { /* ignore */ }
-}
-
-async function buildPreviousSessionSummary(runId: string, worktreePath: string): Promise<string | undefined> {
-  const parts: string[] = [];
-
-  // Recent git log from worktree
-  try {
-    const gitProc = Bun.spawn(
-      ['git', '-C', worktreePath, 'log', '--oneline', '-10'],
-      { stdout: 'pipe', stderr: 'pipe' },
-    );
-    const [gitOut] = await Promise.all([new Response(gitProc.stdout).text(), gitProc.exited]);
-    const gitLog = gitOut.trim();
-    if (gitLog) {
-      parts.push(`### Recent Commits\n\`\`\`\n${gitLog}\n\`\`\``);
-    }
-  } catch { /* ignore */ }
-
-  // Last 20 log entries from the buffer
-  const recentLogs = logBuffers.get(runId);
-  if (recentLogs && recentLogs.length > 0) {
-    const tail = recentLogs.slice(-20);
-    const logSummary = tail.map(e => `[${e.stream}] ${e.content}`).join('\n');
-    parts.push(`### Last Session Output (tail)\n\`\`\`\n${logSummary}\n\`\`\``);
-  }
-
-  return parts.length > 0 ? parts.join('\n\n') : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -823,112 +310,6 @@ async function streamOutput(
   } finally {
     reader.releaseLock();
   }
-}
-
-// ---------------------------------------------------------------------------
-// CI failure log fetching
-// ---------------------------------------------------------------------------
-
-async function fetchCIFailureLogs(repo: string, branch: string): Promise<string> {
-  // Find the most recent failed workflow run on this branch
-  const listProc = Bun.spawn(
-    [
-      'gh', 'run', 'list',
-      '--branch', branch,
-      '--repo', repo,
-      '--status', 'failure',
-      '--json', 'databaseId,name',
-      '--limit', '1',
-    ],
-    { stdout: 'pipe', stderr: 'pipe' },
-  );
-  const [listOut, listExit] = await Promise.all([
-    new Response(listProc.stdout).text(),
-    listProc.exited,
-  ]);
-
-  if (listExit !== 0) return 'Could not fetch CI run list.';
-
-  let listJson: unknown;
-  try {
-    listJson = JSON.parse(listOut);
-  } catch {
-    return 'Could not parse CI run list (invalid JSON).';
-  }
-  const listResult = GHRunListSchema.safeParse(listJson);
-  if (!listResult.success) return 'Could not parse CI run list.';
-  const runs = listResult.data;
-
-  const firstRun = runs[0];
-  if (!firstRun) return 'No failed CI runs found.';
-
-  const runId = firstRun.databaseId;
-  const runName = firstRun.name;
-
-  // Fetch the failed logs
-  const logProc = Bun.spawn(
-    [
-      'gh', 'run', 'view', String(runId),
-      '--repo', repo,
-      '--log-failed',
-    ],
-    { stdout: 'pipe', stderr: 'pipe' },
-  );
-  const [logOut, logExit] = await Promise.all([
-    new Response(logProc.stdout).text(),
-    logProc.exited,
-  ]);
-
-  if (logExit !== 0) return `CI run "${runName}" failed but logs could not be retrieved.`;
-
-  // Truncate to avoid overwhelming the agent prompt
-  const maxLen = 5000;
-  const logs = logOut.trim();
-  if (logs.length > maxLen) {
-    return `CI run "${runName}" failed. Logs (truncated):\n\n${logs.slice(-maxLen)}`;
-  }
-
-  return `CI run "${runName}" failed. Logs:\n\n${logs}`;
-}
-
-async function buildFixPrompt(
-  issue: Issue,
-  worktreePath: string,
-  opts: {
-    fixType: FixType;
-    errorContext: string;
-    attempt: number;
-    codebaseSummary?: string;
-    projectKey?: string;
-  },
-): Promise<string> {
-  const { fixType, errorContext, attempt, codebaseSummary, projectKey } = opts;
-  // Build the base prompt (global + CLAUDE.md + design doc + issue context)
-  const basePrompt = await buildAgentPrompt(issue, worktreePath, { codebaseSummary, projectKey });
-
-  const typeLabel = fixType === 'merge_conflict' ? 'Merge Conflict' : 'CI/CD Failure';
-
-  const fixSection = [
-    '## Fix Task',
-    '',
-    `**Type**: ${typeLabel}`,
-    `**Attempt**: ${attempt} of ${config.maxFixRetries}`,
-    '',
-    '### Error Context',
-    '',
-    errorContext,
-    '',
-    '### Instructions',
-    '',
-    fixType === 'merge_conflict'
-      ? 'A rebase is in progress and conflict markers are present in the working tree. Resolve all conflicts in the affected files and stage them:\n1. Edit each conflicted file to resolve the conflict markers (<<<<<<< / ======= / >>>>>>>).\n2. Run `git add <file>` for each resolved file.\n3. Do NOT run `git rebase --continue` or `git commit` — the orchestrator handles those.'
-      : 'Fix the CI/CD failure described above. Read the error logs carefully, identify the root cause, make the necessary code changes, and commit the fix.',
-    '',
-    '- Do not push — the orchestrator handles git push.',
-    `- Reference the issue key in your commit message: [${issue.key}] fix: description`,
-  ].join('\n');
-
-  return basePrompt + '\n\n---\n\n' + fixSection;
 }
 
 // ---------------------------------------------------------------------------
@@ -1181,7 +562,7 @@ async function executeRun(
         }
 
         // Build previous session summary for next iteration
-        previousSummary = await buildPreviousSessionSummary(runId, worktreePath!);
+        previousSummary = await buildPreviousSessionSummary(runId, worktreePath!, logBuffers);
 
         if (iteration < config.maxSessionIterations - 1) {
           bufferLog(runId, 'system', `[runner] Waiting ${config.autoContinueDelayMs}ms before next session`);
@@ -1822,154 +1203,6 @@ async function pollReviews(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Proactive rebase: after a PR merges, rebase all sibling PRs in the same
-// project to prevent the conflict cascade.
-// ---------------------------------------------------------------------------
-
-async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
-  const siblings = getSiblingOpenPRRuns(mergedRun.project, mergedRun.issue_key);
-  if (siblings.length === 0) return;
-
-  const resolved = resolveProject(mergedRun.issue_repo ?? '');
-  if (!resolved) return;
-
-  const baseBranch = mergedRun.base_branch ?? resolved.project.baseBranch;
-
-  log.info(
-    `[rebase] PR #${mergedRun.pr_number} merged in ${mergedRun.project} — ` +
-    `proactively rebasing ${siblings.length} sibling PR(s)`,
-  );
-
-  for (const sibling of siblings) {
-    try {
-      const projectPath = await ensureProjectLocal(resolved.project, resolved.key);
-      const slug = ulid().slice(-6).toLowerCase();
-      const worktreePath = await setupWorktree(projectPath, sibling.branch, sibling.issue_key, slug);
-
-      try {
-        const result = await rebaseOnto(worktreePath, baseBranch);
-        if (result.success) {
-          await forcePushFromWorktree(worktreePath, sibling.branch);
-          log.info(`[rebase] Auto-rebased PR #${sibling.pr_number} (${sibling.issue_key}) onto ${baseBranch}`);
-        } else {
-          log.info(`[rebase] PR #${sibling.pr_number} (${sibling.issue_key}) has real conflicts — skipping (fixer will handle)`);
-          await abortRebase(worktreePath);
-        }
-      } finally {
-        cleanupWorktree(projectPath, worktreePath).catch(() => {});
-      }
-    } catch (err) {
-      log.warn(
-        `[rebase] Failed to proactively rebase PR #${sibling.pr_number} (${sibling.issue_key}): ` +
-        `${errorMsg(err)}`,
-      );
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Auto-fix polling
-// ---------------------------------------------------------------------------
-
-async function pollFixable(prStatuses?: Map<string, GHPRView[]>): Promise<void> {
-  const allStatuses = prStatuses ?? await fetchAllPRStatuses();
-
-  for (const [repo, prs] of allStatuses) {
-    for (const pr of prs) {
-      try {
-        const fixNeeded = checkFixNeeded(pr);
-        if (!fixNeeded) {
-          // PR is healthy — delete fix tracking entirely
-          deleteFixTracking(repo, pr.number, 'merge_conflict');
-          deleteFixTracking(repo, pr.number, 'ci_failure');
-          continue;
-        }
-
-        const { fixType } = fixNeeded;
-
-        // Only fix PRs created by the orchestrator
-        const resolved = resolveProject(repo);
-        const originalRun = getRunByPRNumber(pr.number, resolved?.key);
-        if (!originalRun) continue;
-
-        // Skip if there's already a queued/running fix for this branch
-        const existingRun = getRunByBranch(pr.headRefName);
-        if (existingRun && (existingRun.status === 'queued' || existingRun.status === 'running')) {
-          continue;
-        }
-
-        // Check fix tracking
-        const tracking = getFixTracking(repo, pr.number, fixType);
-
-        if (tracking?.exhausted) continue;
-
-        // Cooldown: skip if this fix type was recently resolved
-        if (tracking?.resolved_at) {
-          const resolvedMs = new Date(tracking.resolved_at + 'Z').getTime();
-          const elapsed = Date.now() - resolvedMs;
-          if (elapsed < config.fixCooldownMs) {
-            continue;
-          }
-        }
-
-        const currentAttempt = (tracking?.attempt_count ?? 0) + 1;
-
-        if (currentAttempt > config.maxFixRetries) {
-          markFixExhausted(repo, pr.number, fixType);
-          await sendFixExhaustedNotification({
-            repo, prNumber: pr.number, title: pr.title, url: pr.url, fixType, attempts: config.maxFixRetries,
-          });
-          log.info(`[fixer] Fix attempts exhausted for PR #${pr.number} in ${repo} (${fixType})`);
-          continue;
-        }
-
-        // Reconstruct issue from original run
-        const issue = await reconstructIssueFromRun(originalRun);
-
-        if (fixType === 'merge_conflict') {
-          // Try automatic rebase first
-          log.info(`[fixer] Attempting rebase for PR #${pr.number} in ${repo}`);
-          if (!resolved) continue;
-
-          const projectPath = await ensureProjectLocal(resolved.project, resolved.key);
-          const slug = ulid().slice(-6).toLowerCase();
-          const worktreePath = await setupWorktree(projectPath, issue.branch, issue.key, slug);
-
-          try {
-            const rebaseResult = await rebaseOnto(worktreePath, issue.baseBranch);
-
-            if (rebaseResult.success) {
-              // Rebase succeeded cleanly — force push
-              await forcePushFromWorktree(worktreePath, issue.branch);
-              resolveFixTracking(repo, pr.number, fixType);
-              log.info(`[fixer] Auto-rebase succeeded for PR #${pr.number} in ${repo}`);
-            } else {
-              // Rebase failed — abort and spawn agent
-              await abortRebase(worktreePath);
-              const fixRunId = enqueueFix(originalRun, pr.number, issue, fixType, currentAttempt);
-              if (fixRunId) {
-                log.info(`[fixer] Enqueued conflict fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
-              }
-            }
-          } finally {
-            cleanupWorktree(projectPath, worktreePath).catch(() => {});
-          }
-        } else {
-          // CI failure — spawn agent (it will fetch CI logs in its prompt)
-          log.info(`[fixer] CI failure detected for PR #${pr.number} in ${repo}`);
-          const fixRunId = enqueueFix(originalRun, pr.number, issue, 'ci_failure', currentAttempt);
-          if (fixRunId) {
-            log.info(`[fixer] Enqueued CI fix ${fixRunId} for PR #${pr.number} (attempt ${currentAttempt}/${config.maxFixRetries})`);
-          }
-        }
-      } catch (err) {
-        log.error(`[fixer] Error checking PR #${pr.number} in ${repo}:`, err);
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -2084,7 +1317,17 @@ export function startRunner(): void {
     try {
       const prStatuses = await fetchAllPRStatuses();
       await pollMergeReadiness(prStatuses);
-      await pollFixable(prStatuses);
+      await pollFixable(
+        (run, issue, fixType, errorContext) => {
+          const tracking = getFixTracking(issue.repo, run.pr_number!, fixType);
+          const attempt = (tracking?.attempt_count ?? 0) + 1;
+          const fixRunId = enqueueFix(run, run.pr_number!, issue, fixType, attempt);
+          if (fixRunId) {
+            log.info(`[fixer] Enqueued ${fixType} fix ${fixRunId} for PR #${run.pr_number} (${errorContext})`);
+          }
+        },
+        prStatuses,
+      );
     } catch (err) {
       log.error('[notify/fixer] Poll error:', err);
     }
