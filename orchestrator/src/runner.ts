@@ -200,13 +200,12 @@ async function runLineark(args: string[]): Promise<string> {
     await waitForLinearRateLimit();
 
     const proc = Bun.spawn(['lineark', ...args], { stdout: 'pipe', stderr: 'pipe' });
-    const [rawOut, exitCode] = await Promise.all([
+    const [rawOut, errText, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
       proc.exited,
     ]);
     if (exitCode === 0) return rawOut;
-
-    const errText = await new Response(proc.stderr).text();
 
     if ((errText.includes('RATELIMITED') || errText.includes('429')) && attempt < LINEARK_MAX_RETRIES) {
       const jitter = Math.floor(Math.random() * 2000);
@@ -239,7 +238,8 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: token },
       body: JSON.stringify({
-        query: `{ issue(id: "${issueId}") { parent { id identifier } } }`,
+        query: `query ($id: String!) { issue(id: $id) { parent { id identifier } } }`,
+        variables: { id: issueId },
       }),
     });
     const json = await resp.json() as { data?: { issue?: { parent?: { id: string; identifier: string } | null } } };
@@ -1048,6 +1048,8 @@ async function executeRun(
           completed_at: new Date().toISOString(),
         });
         commentOnIssue(issue.key, `Fix agent timed out after ${config.agentTimeoutMs / 1000}s.`);
+        const timeoutCost = tokenTracker.estimateCost();
+        updateRunTokens(runId, timeoutCost);
         return;
       }
 
