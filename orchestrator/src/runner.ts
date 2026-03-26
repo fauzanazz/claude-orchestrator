@@ -382,7 +382,8 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
 }
 
 function updateLinearStatus(key: string, state: string): void {
-  // Fire and forget
+  // Fire and forget — but record the call in the rate limiter
+  linearCallTimestamps.push(Date.now());
   Bun.spawn(['lineark', 'issues', 'update', key, '-s', state], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -390,7 +391,8 @@ function updateLinearStatus(key: string, state: string): void {
 }
 
 function commentOnIssue(key: string, message: string): void {
-  // Fire and forget
+  // Fire and forget — but record the call in the rate limiter
+  linearCallTimestamps.push(Date.now());
   Bun.spawn(['lineark', 'comments', 'create', key, '--body', message], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -781,6 +783,7 @@ async function streamOutput(
 
   const decoder = new TextDecoder();
   const reader = (stream as ReadableStream<Uint8Array>).getReader();
+  let partial = '';
 
   try {
     while (true) {
@@ -791,7 +794,12 @@ async function streamOutput(
         if (streamName === 'stderr') {
           bufferLog(runId, streamName, text);
         } else {
-          for (const line of text.split('\n').filter(Boolean)) {
+          partial += text;
+          const lines = partial.split('\n');
+          // Last element is either '' (if text ended with \n) or a partial line
+          partial = lines.pop()!;
+          for (const line of lines) {
+            if (!line) continue;
             onRawLine?.(line);
             const readable = parseAgentEvent(line);
             if (readable) {
@@ -799,6 +807,14 @@ async function streamOutput(
             }
           }
         }
+      }
+    }
+    // Flush any remaining partial line
+    if (partial) {
+      onRawLine?.(partial);
+      const readable = parseAgentEvent(partial);
+      if (readable) {
+        bufferLog(runId, streamName, readable);
       }
     }
   } finally {

@@ -529,20 +529,23 @@ export function deleteOldRuns(retentionDays: number): number {
     )
   `;
 
-  db.prepare(`DELETE FROM logs WHERE ${oldRunsFilter}`).run(retentionDays);
-  db.prepare(`DELETE FROM processed_reviews WHERE ${oldRunsFilter}`).run(retentionDays);
-  db.prepare(`DELETE FROM fix_tracking WHERE last_run_id IN (
-    SELECT id FROM runs
-    WHERE status IN ('success', 'failed')
-      AND completed_at < datetime('now', '-' || ? || ' days')
-  )`).run(retentionDays);
+  const cleanup = db.transaction((days: number) => {
+    db.prepare(`DELETE FROM logs WHERE ${oldRunsFilter}`).run(days);
+    db.prepare(`DELETE FROM processed_reviews WHERE ${oldRunsFilter}`).run(days);
+    db.prepare(`DELETE FROM fix_tracking WHERE last_run_id IN (
+      SELECT id FROM runs
+      WHERE status IN ('success', 'failed')
+        AND completed_at < datetime('now', '-' || ? || ' days')
+    )`).run(days);
 
-  const result = db.prepare(`
-    DELETE FROM runs
-    WHERE status IN ('success', 'failed')
-      AND completed_at < datetime('now', '-' || ? || ' days')
-  `).run(retentionDays);
-  return result.changes;
+    return db.prepare(`
+      DELETE FROM runs
+      WHERE status IN ('success', 'failed')
+        AND completed_at < datetime('now', '-' || ? || ' days')
+    `).run(days);
+  });
+
+  return cleanup(retentionDays).changes;
 }
 
 export function deleteOldProcessedReviews(retentionDays: number): number {
