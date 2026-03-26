@@ -134,7 +134,7 @@ function getAgentConclusion(runId: string): string | null {
 // Prompt building (extracted to agent-prompts.ts)
 // ---------------------------------------------------------------------------
 
-export interface AgentSignal {
+interface AgentSignal {
   status: 'blocked' | 'needs_clarification' | 'impossible';
   reason: string;
 }

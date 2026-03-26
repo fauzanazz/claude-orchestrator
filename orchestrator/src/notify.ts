@@ -59,7 +59,7 @@ async function ghPRView(repo: string, prNumber: number): Promise<GHPRView | null
   }
 }
 
-export function checkMergeReady(pr: GHPRView, repo: string): PRMergeStatus {
+function checkMergeReady(pr: GHPRView, repo: string): PRMergeStatus {
   const checks = (pr.statusCheckRollup ?? []).map((c) => ({
     name: c.name,
     conclusion: c.conclusion ?? c.status,

@@ -105,15 +105,6 @@ export interface PRMergeStatus {
   isReady: boolean;
 }
 
-// Processed review record (for deduplication)
-export interface ProcessedReview {
-  review_id: string;
-  pr_number: number;
-  repo: string;
-  run_id: string;
-  created_at: string;
-}
-
 // Fix tracking record (for automated fix attempts)
 export interface FixTracking {
   repo: string;
