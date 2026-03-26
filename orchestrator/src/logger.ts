@@ -6,6 +6,8 @@ function shouldLog(level: keyof typeof LEVELS): boolean {
   return LEVELS[level] >= LEVELS[config.logLevel];
 }
 
+export function errorMsg(err: unknown): string { return err instanceof Error ? err.message : String(err); }
+
 export const log = {
   debug(...args: unknown[]) {
     if (shouldLog('debug')) console.log(...args);

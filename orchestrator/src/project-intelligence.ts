@@ -2,29 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { config } from './config.ts';
 import { db } from './db.ts';
 
-// ---------------------------------------------------------------------------
-// Schema
-// ---------------------------------------------------------------------------
-
-db.run(`
-  CREATE TABLE IF NOT EXISTS project_intelligence (
-    project     TEXT NOT NULL,
-    metric      TEXT NOT NULL,
-    value       TEXT NOT NULL,
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (project, metric)
-  )
-`);
-
-export interface ProjectProfile {
-  project: string;
-  avg_duration_seconds: number;
-  avg_sessions: number;
-  success_rate: number;
-  total_runs: number;
-  common_failures: string[];
-  insights: string[];
-}
+// Schema is defined in db.ts alongside other table definitions.
 
 // ---------------------------------------------------------------------------
 // Metric computation (from run history)

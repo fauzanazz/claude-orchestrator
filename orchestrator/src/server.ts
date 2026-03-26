@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { join } from 'node:path';
-import { log } from './logger.ts';
+import { log, errorMsg } from './logger.ts';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import type { SSEEvent, RunStatus } from './types.ts';
@@ -110,7 +110,7 @@ if (!apiToken) {
     writeFileSync(tokenPath, apiToken + '\n', { mode: 0o600 });
     log.info(`[server] Generated ephemeral API token → ${tokenPath}`);
   } catch (err) {
-    log.warn(`[server] Could not write API token to ${tokenPath}: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[server] Could not write API token to ${tokenPath}: ${errorMsg(err)}`);
     log.info(`[server] Ephemeral API token (first 8 chars): ${apiToken.slice(0, 8)}…`);
   }
   log.info(`[server] Set API_TOKEN env var to persist across restarts`);
@@ -286,7 +286,7 @@ app.post('/api/runs/:id/retry', async (c) => {
   try {
     issue = await reconstructIssueFromRun(original);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMsg(err);
     return c.json({ error: sanitizeErrorMessage(msg) }, 500);
   }
 
@@ -450,7 +450,7 @@ app.post('/webhook/github', async (c) => {
   try {
     issue = await reconstructIssueFromRun(run);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMsg(err);
     return c.json({ error: `Failed to reconstruct issue: ${sanitizeErrorMessage(msg)}` }, 500);
   }
 

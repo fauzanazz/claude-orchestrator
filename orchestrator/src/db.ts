@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite';
 import { join, dirname } from 'node:path';
 import { mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import type { Run, RunStatus, LogEntry, FixTracking, Issue } from './types.ts';
+import { errorMsg } from './logger.ts';
 
 const dbPath = process.env.ORCHESTRATOR_DB_PATH ?? join(import.meta.dir, '..', 'orchestrator.db');
 export const db = new Database(dbPath, {
@@ -72,7 +73,7 @@ function migrateAddColumn(sql: string): void {
   try {
     db.run(sql);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMsg(err);
     if (!msg.includes('duplicate column')) throw err;
   }
 }
@@ -106,6 +107,16 @@ db.run(`
 
 // Migration: add resolved_at column to fix_tracking
 migrateAddColumn('ALTER TABLE fix_tracking ADD COLUMN resolved_at TEXT');
+
+db.run(`
+  CREATE TABLE IF NOT EXISTS project_intelligence (
+    project     TEXT NOT NULL,
+    metric      TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (project, metric)
+  )
+`);
 
 // Migrate: add token tracking columns
 migrateAddColumn('ALTER TABLE runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0');

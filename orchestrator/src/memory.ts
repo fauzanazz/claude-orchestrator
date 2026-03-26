@@ -1,6 +1,6 @@
 import { $ } from 'bun';
 import { join } from 'node:path';
-import { log } from './logger.ts';
+import { log, errorMsg } from './logger.ts';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { GoogleGenAI } from '@google/genai';
 import { config } from './config.ts';
@@ -213,7 +213,7 @@ function resolveDocsConfig(worktreePath: string): ProjectDocsConfig | null {
           }
         }
       } catch (err) {
-        log.warn(`[memory] Failed to parse ${configPath}: ${err instanceof Error ? err.message : err}`);
+        log.warn(`[memory] Failed to parse ${configPath}: ${errorMsg(err)}`);
       }
     }
   }
@@ -522,7 +522,7 @@ export async function documentRun(run: Run, issue: Issue, worktreePath: string):
   try {
     await updateProjectDocs(run, issue, context, worktreePath);
   } catch (err) {
-    log.warn(`[memory] Failed to update project docs for ${issue.key}: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[memory] Failed to update project docs for ${issue.key}: ${errorMsg(err)}`);
   }
 }
 

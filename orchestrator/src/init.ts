@@ -23,15 +23,14 @@ async function detectInit(worktreePath: string): Promise<string[]> {
 export async function initWorktree(
   worktreePath: string,
   projectInit: string[] | undefined,
-  runId: string,
-  appendLog: (runId: string, stream: string, content: string) => void,
+  appendLog: (stream: string, content: string) => void,
 ): Promise<void> {
   const commands = projectInit ?? (await detectInit(worktreePath));
 
   for (const cmd of commands) {
     const validated = validateInitCommand(cmd);
     const args = splitCommand(validated);
-    appendLog(runId, 'system', `[init] ${validated}`);
+    appendLog('system', `[init] ${validated}`);
 
     const proc = Bun.spawn(args, {
       cwd: worktreePath,

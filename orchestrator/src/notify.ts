@@ -1,6 +1,6 @@
 import { config } from './config.ts';
 import { isPRNotified, markPRNotified, clearPRNotified } from './db.ts';
-import { log } from './logger.ts';
+import { log, errorMsg } from './logger.ts';
 import { loadProjects } from './config.ts';
 import { GHPRListSchema, GHPRViewSchema, type GHPRListItem, type GHPRView } from './schemas.ts';
 import type { PRMergeStatus } from './types.ts';
@@ -221,7 +221,7 @@ async function sendSlackNotification(pr: PRMergeStatus): Promise<void> {
       log.warn(`[notify] Slack webhook returned ${resp.status}: ${await resp.text().catch(() => '(no body)')}`);
     }
   } catch (err) {
-    log.warn(`[notify] Slack webhook failed: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[notify] Slack webhook failed: ${errorMsg(err)}`);
   }
 }
 
@@ -288,7 +288,7 @@ export async function sendFixExhaustedNotification(opts: FixExhaustedOpts): Prom
       log.warn(`[notify] Slack fix-exhausted webhook returned ${resp.status}: ${await resp.text().catch(() => '(no body)')}`);
     }
   } catch (err) {
-    log.warn(`[notify] Slack fix-exhausted webhook failed: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[notify] Slack fix-exhausted webhook failed: ${errorMsg(err)}`);
   }
 }
 

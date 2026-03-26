@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { log } from './logger.ts';
+import { log, errorMsg } from './logger.ts';
 import { monotonicFactory } from 'ulid';
 import { config, loadProjects, resolveProject } from './config.ts';
 import { documentRun, readProjectMemory } from './memory.ts';
@@ -64,7 +64,7 @@ import {
   isAllFeaturesDone,
   type SessionPromptContext,
 } from './prompts.ts';
-import { pollMergeReadiness, fetchAllPRStatuses, checkFixNeeded, sendFixExhaustedNotification } from './notify.ts';
+import { pollMergeReadiness, fetchAllPRStatuses, checkFixNeeded, sendFixExhaustedNotification, type GHPRView } from './notify.ts';
 import type {
   Run,
   Issue,
@@ -158,13 +158,6 @@ function flushLogs(runId: string): void {
   logBuffers.delete(runId);
 }
 
-// Start periodic flush interval
-setInterval(() => {
-  for (const runId of logBuffers.keys()) {
-    flushLogs(runId);
-  }
-}, config.logFlushIntervalMs);
-
 // ---------------------------------------------------------------------------
 // Linear API rate limiter (shared across lineark CLI + direct GraphQL calls)
 // Linear allows 30 requests per 60s — we stay under with a 25-req budget.
@@ -245,7 +238,7 @@ async function fetchLinearParent(issueId: string): Promise<{ id: string; identif
     const json = await resp.json() as { data?: { issue?: { parent?: { id: string; identifier: string } | null } } };
     return json.data?.issue?.parent ?? null;
   } catch (err) {
-    log.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${err instanceof Error ? err.message : err}`);
+    log.warn(`[runner] Failed to fetch parent for issue ${issueId}: ${errorMsg(err)}`);
     return null;
   }
 }
@@ -285,7 +278,7 @@ async function pollLinear(): Promise<LinearIssue[]> {
         try {
           readOut = await runLineark(['issues', 'read', identifier, '--format', 'json']);
         } catch (err) {
-          log.warn(`[runner] lineark read failed for ${identifier}: ${err instanceof Error ? err.message : err}`);
+          log.warn(`[runner] lineark read failed for ${identifier}: ${errorMsg(err)}`);
           return null;
         }
 
@@ -355,11 +348,16 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
 
   // Branch and repo are always required
   if (branch && repo) {
-    return {
-      designPath: designPath ? validateDesignPath(designPath) : null,
-      branch: validateBranch(branch),
-      repo: validateRepo(repo),
-    };
+    try {
+      return {
+        designPath: designPath ? validateDesignPath(designPath) : null,
+        branch: validateBranch(branch),
+        repo: validateRepo(repo),
+      };
+    } catch (err) {
+      log.warn(`[runner] parseIssueMetadata: validation failed: ${errorMsg(err)}`);
+      return null;
+    }
   }
 
   // Fallback: extract from prose-style descriptions
@@ -374,11 +372,16 @@ export function parseIssueMetadata(description: string): ParsedIssueMetadata | n
 
   if (!pb || !pr) return null;
 
-  return {
-    designPath: pd ? validateDesignPath(pd) : null,
-    branch: validateBranch(pb),
-    repo: validateRepo(pr),
-  };
+  try {
+    return {
+      designPath: pd ? validateDesignPath(pd) : null,
+      branch: validateBranch(pb),
+      repo: validateRepo(pr),
+    };
+  } catch (err) {
+    log.warn(`[runner] parseIssueMetadata: validation failed: ${errorMsg(err)}`);
+    return null;
+  }
 }
 
 function updateLinearStatus(key: string, state: string): void {
@@ -628,7 +631,7 @@ async function buildAgentPrompt(
       });
       if (memory) sections.push(memory);
     } catch (err) {
-      log.warn(`[runner] Memory injection failed for ${projectKey}: ${err instanceof Error ? err.message : err}`);
+      log.warn(`[runner] Memory injection failed for ${projectKey}: ${errorMsg(err)}`);
     }
   }
 
@@ -891,12 +894,15 @@ async function fetchCIFailureLogs(repo: string, branch: string): Promise<string>
 async function buildFixPrompt(
   issue: Issue,
   worktreePath: string,
-  fixType: FixType,
-  errorContext: string,
-  attempt: number,
-  codebaseSummary?: string,
-  projectKey?: string,
+  opts: {
+    fixType: FixType;
+    errorContext: string;
+    attempt: number;
+    codebaseSummary?: string;
+    projectKey?: string;
+  },
 ): Promise<string> {
+  const { fixType, errorContext, attempt, codebaseSummary, projectKey } = opts;
   // Build the base prompt (global + CLAUDE.md + design doc + issue context)
   const basePrompt = await buildAgentPrompt(issue, worktreePath, { codebaseSummary, projectKey });
 
@@ -979,9 +985,9 @@ async function executeRun(
 
     let initFailure: string | null = null;
     try {
-      await initWorktree(worktreePath, project.init, runId, bufferLog);
+      await initWorktree(worktreePath, project.init, (stream, content) => bufferLog(runId, stream, content));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMsg(err);
       initFailure = msg;
       bufferLog(runId, 'system', `[runner] Init failed (non-blocking): ${msg}`);
     }
@@ -1011,7 +1017,7 @@ async function executeRun(
         errorContext = `Automatic rebase onto ${issue.baseBranch} failed. Conflict markers are present in the working tree.\n\n${rebaseResult.conflictOutput ?? ''}`;
       }
 
-      let fixPrompt = await buildFixPrompt(issue, worktreePath, run.fix_type as FixType, errorContext, run.fix_attempt, codebaseSummary, projectKey);
+      let fixPrompt = await buildFixPrompt(issue, worktreePath, { fixType: run.fix_type as FixType, errorContext, attempt: run.fix_attempt, codebaseSummary, projectKey });
       if (initFailure) {
         fixPrompt += `\n\n## Warning: Dependency Install Failed\n\n\`${initFailure}\`\n\nRun the install command yourself before proceeding.`;
       }
@@ -1354,20 +1360,20 @@ async function executeRun(
         }
       } catch (err) {
         bufferLog(runId, 'system',
-          `[runner] Auto-review failed (non-fatal): ${err instanceof Error ? err.message : err}`
+          `[runner] Auto-review failed (non-fatal): ${errorMsg(err)}`
         );
       }
     }
     // Document the run to obsidian-memory (fire-and-forget, before worktree cleanup)
     if (worktreePath && updatedRun) {
       await documentRun(updatedRun, issue, worktreePath).catch((e) =>
-        log.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+        log.warn(`[runner] Memory documentation failed: ${errorMsg(e)}`),
       );
     }
 
     // Update project intelligence (fire-and-forget)
     updateProjectIntelligence(projectKey).catch((e) =>
-      log.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+      log.warn(`[runner] Project intelligence update failed: ${errorMsg(e)}`),
     );
 
   } catch (err) {
@@ -1377,7 +1383,7 @@ async function executeRun(
       updateRunTokens(runId, failCost);
     }
 
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = errorMsg(err);
     bufferLog(runId, 'system', `[runner] Run ${runId} failed: ${errorMessage}`);
     updateRunStatus(runId, 'failed', {
       error_summary: errorMessage.slice(0, 500),
@@ -1420,13 +1426,13 @@ async function executeRun(
     // Document failed run to obsidian-memory (before worktree cleanup)
     if (worktreePath && failedRun) {
       await documentRun(failedRun, issue, worktreePath).catch((e) =>
-        log.warn(`[runner] Memory documentation failed: ${e instanceof Error ? e.message : e}`),
+        log.warn(`[runner] Memory documentation failed: ${errorMsg(e)}`),
       );
     }
 
     // Update intelligence even for failed runs (failure patterns are valuable)
     updateProjectIntelligence(projectKey).catch((e) =>
-      log.warn(`[runner] Project intelligence update failed: ${e instanceof Error ? e.message : e}`),
+      log.warn(`[runner] Project intelligence update failed: ${errorMsg(e)}`),
     );
 
   } finally {
@@ -1855,7 +1861,7 @@ async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
     } catch (err) {
       log.warn(
         `[rebase] Failed to proactively rebase PR #${sibling.pr_number} (${sibling.issue_key}): ` +
-        `${err instanceof Error ? err.message : err}`,
+        `${errorMsg(err)}`,
       );
     }
   }
@@ -1865,7 +1871,7 @@ async function proactiveRebaseSiblings(mergedRun: Run): Promise<void> {
 // Auto-fix polling
 // ---------------------------------------------------------------------------
 
-async function pollFixable(prStatuses?: Map<string, import('./notify.ts').GHPRView[]>): Promise<void> {
+async function pollFixable(prStatuses?: Map<string, GHPRView[]>): Promise<void> {
   const allStatuses = prStatuses ?? await fetchAllPRStatuses();
 
   for (const [repo, prs] of allStatuses) {
@@ -1984,6 +1990,13 @@ export function startRunner(): void {
     }
   }
 
+  // Start periodic log flush interval
+  setInterval(() => {
+    for (const runId of logBuffers.keys()) {
+      flushLogs(runId);
+    }
+  }, config.logFlushIntervalMs);
+
   // Poll Linear for new issues
   setInterval(async () => {
     try {
@@ -1994,7 +2007,7 @@ export function startRunner(): void {
         try {
           meta = parseIssueMetadata(linearIssue.description ?? '');
         } catch (err) {
-          log.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${err instanceof Error ? err.message : err}`);
+          log.warn(`[runner] poll: invalid metadata in issue ${linearIssue.identifier}: ${errorMsg(err)}`);
           continue;
         }
         if (!meta) continue;
